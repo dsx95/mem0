@@ -1,0 +1,20 @@
+# Run uv pip compile/sync from the repository root.
+-e .[nlp]
+# Mem0's lemma and entity extraction share this English spaCy pipeline.
+spacy>=3.8,<3.9
+en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
+# Qdrant's BM25 sparse encoder; CPU runtime only.
+fastembed>=0.3.1,<1
+python-dotenv>=1.0,<2
+ollama>=0.6,<1
+pytest>=8,<10
+ruff==0.16.0
+# Material ingestion: local PDF rendering/text extraction and HTML parsing.
+pymupdf>=1.26,<2
+beautifulsoup4>=4.13,<5
+Pillow>=11,<13
+# Video/audio decoding; binary wheel bundles FFmpeg libraries inside .venv.
+av>=16.1,<17
+# Local memory dashboard; same FastAPI stack as the repository server.
+fastapi>=0.115,<1
+uvicorn>=0.34,<1

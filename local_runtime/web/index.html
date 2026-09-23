@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light"><title>Knowin · 记忆空间</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' rx='12' fill='%233b6049'/%3E%3Cpath d='M11 10v20m18-20L13 20l16 10' fill='none' stroke='white' stroke-width='3'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/style.css"><script type="module" src="/static/app.js"></script>
+</head>
+<body>
+<svg class="svg-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
+<symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></symbol>
+<symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7V5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></symbol>
+<symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+<symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V3m-5 5 5-5 5 5M4 16v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4"/></symbol>
+<symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></symbol>
+<symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6"/></symbol>
+<symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol>
+<symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H5v18h14V8Zm0 0v5h5M8 12h8m-8 4h6"/></symbol>
+<symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8" cy="8" r="1"/><path d="m3 16 6-5 4 4 4-3 4 4"/></symbol>
+<symbol id="i-video" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="m10 8 6 4-6 4Z"/></symbol>
+<symbol id="i-chat" viewBox="0 0 24 24"><path d="M21 11a8 8 0 0 1-8 8H7l-5 3 1-7a8 8 0 1 1 18-4Z"/><path d="M7 10h9m-9 4h6"/></symbol>
+<symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 8a8 8 0 1 0 0 8M20 3v5h-5"/></symbol>
+<symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+<symbol id="i-code" viewBox="0 0 24 24"><path d="m7 7-5 5 5 5m10-10 5 5-5 5m-4-14-2 18"/></symbol>
+<symbol id="i-stack" viewBox="0 0 24 24"><path d="m12 3 10 5-10 5L2 8Zm-10 9 10 5 10-5M2 16l10 5 10-5"/></symbol>
+<symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21v-2a8 8 0 0 1 16 0v2"/></symbol>
+</defs></svg>
+<aside class="sidebar">
+  <a class="brand" href="/" aria-label="Knowin 记忆空间"><span class="brand-mark">k<span>·</span></span><span>KNOWIN<small>记忆空间 / MEMORY</small></span></a>
+  <div class="workspace-tag"><span class="workspace-avatar">诺</span><div>诺因工作空间<small>本地记忆管理</small></div><span class="tiny-dot"></span></div>
+  <p class="nav-caption">工作空间</p>
+  <nav aria-label="主导航">
+    <a class="nav-item" href="/chat" style="text-decoration:none"><svg><use href="#i-chat"/></svg>记忆对话<span>新</span></a>
+    <button class="nav-item active" data-view="memories"><svg><use href="#i-grid"/></svg>记忆总览<span id="nav-count">—</span></button>
+    <button class="nav-item" data-view="sources"><svg><use href="#i-folder"/></svg>资料库</button>
+    <button class="nav-item" data-view="jobs"><svg><use href="#i-clock"/></svg>导入记录<span id="active-count" hidden></span></button>
+  </nav>
+  <div class="side-note"><svg><use href="#i-stack"/></svg><strong>让记忆有据可查</strong><p>从原始资料到记忆片段，<br>保留每一份信息的来源。</p></div>
+  <div class="sidebar-bottom"><span class="status-light"></span><div>本地工作空间<small id="connection-label">正在连接记忆库…</small></div><span class="version">v1.0</span></div>
+</aside>
+<div class="main-wrap">
+  <header class="topbar"><div class="breadcrumb">工作空间<span>/</span><strong id="breadcrumb">记忆总览</strong></div><div class="topbar-right"><span class="local-badge"><span class="tiny-dot"></span>本机访问</span><button class="icon-button" id="refresh" title="刷新数据" aria-label="刷新数据"><svg><use href="#i-refresh"/></svg></button><span class="profile">K</span></div></header>
+  <main>
+    <section class="page-heading"><div><div class="eyebrow">KNOWLEDGE, CONNECTED</div><h1 id="page-title">记忆总览</h1><p id="page-subtitle">查看、检索和追溯你的每一条记忆。</p></div><button class="button primary" id="open-upload"><svg><use href="#i-upload"/></svg>添加记忆</button></section>
+    <div id="connection-error" class="notice error" hidden></div>
+    <section class="stats" aria-label="记忆统计">
+      <article class="stat"><div><span>全部记忆</span><svg><use href="#i-stack"/></svg></div><strong id="stat-total">—</strong><small>已持久保存的记忆片段</small></article>
+      <article class="stat"><div><span>已入库资料</span><svg><use href="#i-folder"/></svg></div><strong id="stat-sources">—</strong><small>文档、图片与视频来源</small></article>
+      <article class="stat"><div><span>视频记忆</span><svg><use href="#i-video"/></svg></div><strong id="stat-videos">—</strong><small>保留画面与音轨时间范围</small></article>
+      <article class="stat"><div><span>用户范围</span><svg><use href="#i-user"/></svg></div><strong id="stat-users">—</strong><small>按所属用户分别查看</small></article>
+    </section>
+    <section id="memory-view">
+      <div class="search-panel"><form id="search-form"><label class="search-input"><svg><use href="#i-search"/></svg><input id="query" autocomplete="off" placeholder="搜索记忆内容或文件名…" aria-label="搜索记忆"></label><div class="search-modes" aria-label="搜索方式"><button type="button" class="selected" data-mode="keyword">关键词</button><button type="button" data-mode="semantic">语义</button></div><button class="button search-submit" type="submit">搜索<svg><use href="#i-arrow"/></svg></button></form><p id="search-hint">关键词匹配内容和文件名；切换到语义搜索，可用自然语言提问。</p></div>
+      <div class="filterbar"><div class="tabs" id="category-tabs"><button class="selected" data-kind="">全部</button><button data-kind="document">文档</button><button data-kind="image">图片</button><button data-kind="video">视频</button><button data-kind="chat">对话</button><button data-kind="text">文本</button><button data-kind="structured">结构数据</button></div><select id="user-filter" aria-label="按用户筛选"><option value="">所有用户</option></select></div>
+      <div class="results-heading"><p id="result-label">正在读取记忆…</p><button id="clear-filter" class="text-button" hidden>清除筛选</button><span id="sort-label">最近写入优先</span></div>
+      <div id="source-filter-note" class="notice" hidden></div>
+      <div id="memory-grid" class="memory-grid" aria-live="polite"><div class="loading-state">正在连接记忆库…</div></div>
+      <div class="pagination"><span id="page-label"></span><div><button id="prev" class="button secondary" disabled>上一页</button><button id="next" class="button secondary" disabled>下一页</button></div></div>
+    </section>
+    <section id="sources-view" hidden><div class="section-line"><div><h2>来源文件</h2><p>查看资料入库状态，按来源追溯记忆。</p></div><input class="compact-search" id="source-query" placeholder="筛选文件名…" aria-label="筛选来源文件"></div><div id="sources-list"></div></section>
+    <section id="jobs-view" hidden><div class="section-line"><div><h2>上传与导入任务</h2><p>上传后在后台处理，完成后自动出现在记忆总览。</p></div><span class="live-label"><span class="tiny-dot"></span>每 5 秒自动更新</span></div><div id="jobs-list"></div></section>
+    <footer class="page-footer"><span>KNOWIN MEMORY<span class="footer-dot">·</span>信息有来源，记忆可追溯</span><span id="model-label">正在读取模型配置</span></footer>
+  </main>
+</div>
+<dialog id="upload-dialog" aria-labelledby="upload-title"><div class="modal-header"><div><div class="eyebrow">ADD TO MEMORY</div><h2 id="upload-title">添加新的记忆</h2></div><button class="icon-button" data-close="upload-dialog" aria-label="关闭上传窗口"><svg><use href="#i-close"/></svg></button></div><p class="modal-intro">上传资料或写下一段文字，自动整理成可搜索的记忆。</p>
+  <div class="upload-tabs"><button class="selected" data-upload-tab="files">上传文件</button><button data-upload-tab="text">写入文本</button></div>
+  <div id="file-upload-pane"><button id="dropzone" class="dropzone" type="button"><span class="drop-icon"><svg><use href="#i-upload"/></svg></span><strong>将文件拖到这里，或点击选择</strong><span>支持多文件上传 · 单文件最多 <span id="max-size">512</span> MB</span><small>PDF · DOCX · 图片 · 视频 · TXT / Markdown · HTML · JSON / CSV</small></button><input id="file-picker" type="file" multiple hidden><div id="selected-files" class="selected-files"></div><p class="field-help">Word 按正文、表格和内嵌图片提取；需要精确页码时请上传 PDF。视频最多 30 分钟。</p></div>
+  <div id="text-upload-pane" hidden><label class="field">记忆标题<input id="text-title" placeholder="例如：产品说明补充" maxlength="60"></label><label class="field">记忆内容<textarea id="text-content" rows="7" placeholder="输入需要长期保存、检索的文字…" maxlength="100000"></textarea></label></div>
+  <label class="field">所属用户 / 资料范围<input id="upload-user" value="knowin_public" list="user-options" maxlength="100"><datalist id="user-options"></datalist><small>公开资料默认使用 knowin_public；同一范围内重复文件会跳过已入库片段。</small></label>
+  <div id="upload-progress" class="upload-progress" hidden><div><strong id="upload-progress-label">正在上传</strong><span id="upload-percent">0%</span></div><progress id="upload-bar" max="100" value="0"></progress></div><div id="upload-error" class="notice error" hidden></div>
+  <div class="modal-footer"><span>画面解析与语音转写使用已配置的模型</span><button id="submit-upload" class="button primary"><svg><use href="#i-upload"/></svg>开始导入</button></div>
+</dialog>
+<dialog id="detail-dialog" aria-labelledby="detail-title"><div class="detail-header"><span class="eyebrow">MEMORY DETAIL</span><button class="icon-button" data-close="detail-dialog" aria-label="关闭记忆详情"><svg><use href="#i-close"/></svg></button></div><div id="detail-content"></div></dialog>
+<div id="toast" role="status" aria-live="polite" hidden></div>
+</body></html>

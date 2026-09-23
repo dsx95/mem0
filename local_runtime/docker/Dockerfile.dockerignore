@@ -1,0 +1,19 @@
+# Allowlist: do not send credentials, databases, materials, host venv or caches
+# to the Docker builder. This file applies specifically to this Dockerfile.
+**
+!pyproject.toml
+!README.md
+!LICENSE
+!mem0/
+!mem0/**
+!local_runtime/
+!local_runtime/*.py
+!local_runtime/requirements.lock
+!local_runtime/web/
+!local_runtime/web/**
+!local_runtime/docker/
+!local_runtime/docker/Dockerfile
+!local_runtime/docker/Dockerfile.dockerignore
+**/__pycache__/
+**/*.pyc
+**/*.env

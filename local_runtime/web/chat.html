@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light"><title>Knowin · 记忆对话</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' rx='12' fill='%233b6049'/%3E%3Cpath d='M11 10v20m18-20L13 20l16 10' fill='none' stroke='white' stroke-width='3'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/chat.css"><script type="module" src="/static/chat.js"></script>
+</head>
+<body>
+<svg class="definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
+<symbol id="plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+<symbol id="arrow" viewBox="0 0 24 24"><path d="M12 19V5m-6 6 6-6 6 6"/></symbol>
+<symbol id="chat" viewBox="0 0 24 24"><path d="M21 11a8 8 0 0 1-8 8H7l-5 3 1-7a8 8 0 1 1 18-4Z"/></symbol>
+<symbol id="stack" viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5Zm-9 9 9 5 9-5M3 16l9 5 9-5"/></symbol>
+<symbol id="spark" viewBox="0 0 24 24"><path d="m12 2 2.8 7.2L22 12l-7.2 2.8L12 22l-2.8-7.2L2 12l7.2-2.8Z"/></symbol>
+<symbol id="search" viewBox="0 0 24 24"><circle cx="10" cy="10" r="6"/><path d="m15 15 5 5"/></symbol>
+<symbol id="check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+<symbol id="close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol>
+<symbol id="menu" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
+<symbol id="book" viewBox="0 0 24 24"><path d="M12 5c-3-2-6-2-10-1v15c4-1 7-1 10 1 3-2 6-2 10-1V4c-4-1-7-1-10 1Zm0 0v15"/></symbol>
+<symbol id="trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V3h6v4M6 7l1 14h10l1-14M10 11v6m4-6v6"/></symbol>
+</defs></svg>
+<div id="shade" class="shade" hidden></div>
+<aside class="sidebar" id="sidebar">
+  <a href="/chat" class="brand"><span class="brand-mark">k<span>·</span></span><span>KNOWIN<small>你的记忆对话空间</small></span></a>
+  <button id="new-chat" class="new-chat"><svg><use href="#plus"/></svg>开启新对话<span>↗</span></button>
+  <nav class="main-nav"><a class="selected" href="/chat"><svg><use href="#chat"/></svg>记忆对话<span class="nav-dot"></span></a><a href="/"><svg><use href="#stack"/></svg>记忆资料库<small>↗</small></a></nav>
+  <div class="history-heading">最近的对话<span id="session-count">0</span></div>
+  <div id="session-list" class="session-list" aria-label="对话历史"><p class="sidebar-empty">每次对话，都从这里继续。</p></div>
+  <div class="sidebar-note"><span class="little-star">✳</span><p>好对话，不必从头开始。<small>新对话也能找回你的长期记忆。</small></p></div>
+  <button id="identity-button" class="identity"><span class="avatar">我</span><span>我的记忆空间<small id="identity-label">个人空间</small></span><span class="settings-icon">⚙</span></button>
+</aside>
+<main class="chat-main">
+  <header class="topbar"><div class="topbar-title"><button class="icon mobile-menu" id="menu-button" aria-label="打开导航"><svg><use href="#menu"/></svg></button><span>对话</span><span class="slash">/</span><strong id="conversation-title">新的对话</strong></div><div class="topbar-actions"><span class="model-badge"><i></i><span id="model-name">连接中</span></span><button class="icon" id="memory-toggle" title="查看记忆" aria-label="查看记忆"><svg><use href="#stack"/></svg></button><button class="icon" id="delete-chat" title="删除当前对话，保留长期记忆" aria-label="删除当前对话" hidden><svg><use href="#trash"/></svg></button></div></header>
+  <div id="error-banner" class="error-banner" role="alert" hidden></div>
+  <div class="conversation-scroll" id="conversation-scroll">
+    <section id="welcome" class="welcome">
+      <div class="welcome-mark"><svg><use href="#spark"/></svg><span></span><span></span></div>
+      <p class="eyebrow">A LITTLE MORE UNDERSTANDING, EVERY DAY</p>
+      <h1>聊得越多，<br><em>懂你越多。</em></h1>
+      <p class="welcome-description">分享一个想法，或聊聊你的计划。<br>值得记住的事，下次我们接着聊。</p>
+      <div class="suggestions">
+        <button data-prompt="请记住：我喜欢简洁直接的回答，最好先给结论，再解释原因。"><span class="suggestion-icon sage"><svg><use href="#spark"/></svg></span><strong>让我们熟悉一点</strong><small>告诉我你的习惯与偏好</small><span class="suggestion-arrow">↗</span></button>
+        <button data-prompt="你记得我有哪些偏好或之前的约定吗？请先查一下我的记忆。"><span class="suggestion-icon sand"><svg><use href="#search"/></svg></span><strong>接着上次的话题</strong><small>找回我们聊过的重要事情</small><span class="suggestion-arrow">↗</span></button>
+        <button data-prompt="请查阅资料库，介绍一下诺因智能的主要产品和技术方向，并注明资料来源。"><span class="suggestion-icon lilac"><svg><use href="#book"/></svg></span><strong>问问资料里的事</strong><small>从已有资料中寻找答案</small><span class="suggestion-arrow">↗</span></button>
+      </div>
+    </section>
+    <div id="messages" class="messages" aria-live="polite" aria-relevant="additions"></div>
+  </div>
+  <div class="composer-area"><div id="reply-status" class="reply-status" role="status" hidden><span class="pulse-dot"></span><span>正在思考…</span></div>
+    <form id="composer" class="composer"><div class="identity-fields">
+      <label>用户 <code>user_id</code><select id="user-id" required aria-label="选择数据库用户"><option value="chat_default">chat_default</option></select></label>
+      <label>家庭 <code>family_id</code><input id="family-id" placeholder="选填，例如 family_001" pattern="[A-Za-z0-9][A-Za-z0-9_.\-]{0,63}" maxlength="64" autocomplete="off"></label>
+      <label class="scope-field">本条消息保存到<select id="remember-scope" aria-label="记忆保存范围"><option value="personal">个人记忆</option><option value="family">家庭共享</option></select></label>
+      <button type="button" id="apply-identity" class="apply-identity">切换身份</button>
+    </div><p id="identity-context" class="identity-context">身份会随每条消息发送，切换身份会开启独立对话。</p><label class="visually-hidden" for="message-input">发送消息</label><textarea id="message-input" placeholder="说说你的想法，或让我记住一件事…" rows="2" maxlength="12000"></textarea><div class="composer-bottom"><span class="memory-enabled"><svg><use href="#spark"/></svg>长期记忆已连接</span><span class="composer-key">Enter 发送 · Shift + Enter 换行</span><button type="button" id="stop-button" class="stop-button" hidden>停止回复</button><button id="send-button" class="send-button" type="submit" aria-label="发送消息" disabled><svg><use href="#arrow"/></svg></button></div></form>
+    <p class="composer-footnote">个人记忆按用户和家庭分别保存；家庭共享仅写入当前家庭。这是本机测试身份，不是账号认证。</p>
+  </div>
+</main>
+<aside id="memory-panel" class="memory-panel"><div class="panel-heading"><div><span class="eyebrow">REMEMBER, TOGETHER</span><h2>个人与家庭记忆 <span id="memory-count">0</span></h2></div><button class="icon panel-close" id="close-memory" aria-label="关闭记忆面板"><svg><use href="#close"/></svg></button></div>
+  <div class="memory-intro"><span class="tiny-star">✳</span><p>在每一次交流中，<br>慢慢积累对你的了解。</p></div>
+  <div id="personal-memories" class="personal-memories"><div class="memory-empty"><div class="memory-orbit"><span>✧</span></div><strong>故事，从这里开始</strong><p>告诉我一件你希望记住的事，<br>它就会出现在这里。</p></div></div>
+  <section class="library-card"><div class="library-top"><span class="library-icon"><svg><use href="#book"/></svg></span><div><strong>参考诺因资料库</strong><small>从现有资料中查找答案</small></div><label class="switch"><input id="library-toggle" type="checkbox" checked aria-label="参考诺因资料库"><span></span></label></div><p>资料只用于参考，你的个人记忆单独保存。</p><a href="/">打开记忆资料库 <span>↗</span></a></section>
+  <div class="panel-footer"><span class="status-dot"></span>记忆由 Mem0 持久保存</div>
+</aside>
+<dialog id="identity-dialog"><form id="identity-form"><div class="dialog-heading"><h2>对话身份</h2><button type="button" class="icon" id="close-identity" aria-label="关闭"><svg><use href="#close"/></svg></button></div><p>个人记忆按 user_id 和 family_id 组合保存，同一家庭可读取家庭共享记忆。</p><label>用户 user_id<input id="identity-input" value="chat_default" pattern="[A-Za-z0-9][A-Za-z0-9_.\-]{0,63}" maxlength="64" required autocomplete="off"></label><label>家庭 family_id（选填）<input id="identity-family" pattern="[A-Za-z0-9][A-Za-z0-9_.\-]{0,63}" maxlength="64" autocomplete="off"></label><small>这是本机测试身份，不是账号认证；标识使用字母、数字、点、下划线或短横线。</small><button type="submit" class="dialog-submit">切换到这个身份</button></form></dialog>
+<datalist id="known-users"></datalist>
+</body></html>
