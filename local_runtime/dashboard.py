@@ -27,6 +27,7 @@ from fastapi.staticfiles import StaticFiles
 from .material_errors import MaterialError
 from .materials import DEFAULT_ROOT, chunk_records, digest, error_summary, existing_chunks, file_hash, write_json
 from .runtime import PROJECT_ROOT, close_memory, create_memory, load_settings
+from .rerank import Reranker
 from .videos import VIDEO_EXTENSIONS
 from .web_parsing import WEB_EXTENSIONS, WebParser
 
@@ -69,6 +70,7 @@ class Dashboard:
         self.jobs_db = self.directory / "jobs.sqlite"
         self.limit = max_upload_mb * 1024 * 1024
         self.memory = None
+        self.reranker = Reranker(getattr(settings, "rerank", None))
         self.memory_lock, self.state_lock = threading.RLock(), threading.RLock()
         self.items, self.jobs = [], {}
         self.pending = queue.Queue()
@@ -94,6 +96,9 @@ class Dashboard:
 
     def start(self):
         self.memory = self.memory_factory(self.settings)
+        if getattr(self.memory, "runtime_reranker", None):
+            self.reranker.close()
+            self.reranker = self.memory.runtime_reranker
         self.refresh()
         for job in list(self.jobs.values()):
             if job["status"] in ACTIVE:
@@ -109,6 +114,7 @@ class Dashboard:
             self.worker.join()
         if self.memory is not None:
             close_memory(self.memory)
+        self.reranker.close()
 
     def refresh(self):
         values, offset = [], None
@@ -462,12 +468,13 @@ def create_app(settings=None, root=DEFAULT_ROOT, memory_factory=create_memory, m
                 collection_name=service.settings.collection,
                 query=embedding,
                 query_filter=Filter(must=conditions),
-                limit=limit,
+                limit=service.reranker.candidate_limit(limit),
                 with_payload=False,
             )
         lookup = {i["id"]: i for i in candidates}
         items = [{**lookup[str(p.id)], "score": p.score} for p in result.points if p.score >= 0.1]
-        return {"items": items, "total": len(items), "semantic": True}
+        items, rerank = service.reranker.rank(q, items, limit)
+        return {"items": items, "total": len(items), "semantic": True, "rerank": rerank}
 
     @app.get("/api/memories/{memory_id}")
     def detail(memory_id: str):

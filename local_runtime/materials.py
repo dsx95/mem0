@@ -481,11 +481,13 @@ def search_materials(memory, query: str, root: Path, user_id: str, top_k=5, sour
     filters = {"user_id": user_id, "source_root": map_path(str(root), store=True)}
     if source_files:
         filters["OR"] = [{"source_file": name} for name in source_files]
+    reranker = getattr(memory, "runtime_reranker", None)
+    candidate_limit = reranker.candidate_limit(top_k) if reranker else top_k
     if hybrid:
-        result = memory.search(query, filters=filters, top_k=top_k)
+        result = memory.search(query, filters=filters, top_k=candidate_limit)
     else:
         vectors = memory.embedding_model.embed(query, "search")
-        points = memory.vector_store.search(query=query, vectors=vectors, top_k=top_k, filters=filters)
+        points = memory.vector_store.search(query=query, vectors=vectors, top_k=candidate_limit, filters=filters)
         records = []
         for point in points:
             if point.score < 0.1:
@@ -495,6 +497,8 @@ def search_materials(memory, query: str, root: Path, user_id: str, top_k=5, sour
                 item["score"] = float(point.score)
                 records.append(item)
         result = {"results": records}
+    if reranker:
+        result["results"], result["rerank"] = reranker.rank(query, result.get("results", []), top_k)
     return {"search_mode": "hybrid" if hybrid else "semantic", **result}
 
 

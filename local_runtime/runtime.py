@@ -15,6 +15,7 @@ from urllib.parse import urlsplit
 from dotenv import dotenv_values
 
 from .presets import PRESETS
+from .rerank import DEFAULT_URL, RerankConfig, Reranker, accepts_shared_qwen_key
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 PROVIDERS = {"openai", "ollama"}
@@ -76,8 +77,12 @@ class Settings:
     custom_instructions: str
     env_file: Path
     preset: str = ""
+    diary_auto_summary: bool = True
+    rerank: RerankConfig = field(default_factory=RerankConfig)
 
     def validate(self, component: str = "all") -> None:
+        if component in {"all", "rerank"}:
+            self.rerank.validate()
         if self.preset and not self.llm.api_key:
             raise ValueError("Set MEM0_PROVIDER_API_KEY in the selected profile; it is shared by LLM and embedding")
         if component in {"all", "llm"}:
@@ -137,7 +142,7 @@ class Settings:
 
     def describe(self) -> dict:
         errors = []
-        for component in ("llm", "embedding"):
+        for component in ("llm", "embedding", "rerank"):
             try:
                 self.validate(component)
             except ValueError as exc:
@@ -147,6 +152,7 @@ class Settings:
             "preset": self.preset or None,
             "llm": self.llm.describe(),
             "embedding": self.embedding.describe(),
+            "rerank": self.rerank.describe(),
             "embedding_dims": self.embedding_dims,
             "send_embedding_dimensions": self.send_embedding_dimensions,
             "data_dir": str(self.data_dir),
@@ -214,6 +220,16 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
         raise ValueError("MEM0_REQUEST_TIMEOUT must be positive and MEM0_MAX_RETRIES must be nonnegative")
     if not math.isfinite(temperature) or not 0 <= temperature <= 2 or max_tokens <= 0:
         raise ValueError("MEM0_LLM_TEMPERATURE must be in [0, 2] and MEM0_LLM_MAX_TOKENS must be positive")
+    rerank_url = get("RERANK_URL", DEFAULT_URL)
+    rerank_key = get("RERANK_API_KEY")
+    if not rerank_key and preset == "qwen" and accepts_shared_qwen_key(rerank_url):
+        rerank_key = get("PROVIDER_API_KEY")
+    rerank = RerankConfig(
+        enabled=_bool(get("RERANK_ENABLED", "false"), "MEM0_RERANK_ENABLED"),
+        url=rerank_url, model=get("RERANK_MODEL", "qwen3-rerank"), api_key=rerank_key,
+        timeout=float(get("RERANK_TIMEOUT", "3")), candidates=int(get("RERANK_CANDIDATES", "30")),
+        top_n=int(get("RERANK_TOP_N", "8")),
+    )
     return Settings(
         llm=llm,
         embedding=embedding,
@@ -228,7 +244,9 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
         is_reasoning_model=None if reasoning == "auto" else _bool(reasoning, "MEM0_LLM_IS_REASONING_MODEL"),
         custom_instructions=get("CUSTOM_INSTRUCTIONS"),
         env_file=path,
+        diary_auto_summary=_bool(get("DIARY_AUTO_SUMMARY", "true"), "MEM0_DIARY_AUTO_SUMMARY"),
         preset=preset,
+        rerank=rerank,
     )
 
 
@@ -323,10 +341,13 @@ def create_memory(settings: Settings | None = None):
     memory = Memory.from_config(settings.memory_config())
     _set_request_options(memory.llm, settings.llm, settings, "llm")
     _set_request_options(memory.embedding_model, settings.embedding, settings, "embedding")
+    memory.runtime_reranker = Reranker(settings.rerank)
     return memory
 
 
 def close_memory(memory) -> None:
     """Release SQLite and the local Qdrant lock so another instance can reopen it."""
+    if getattr(memory, "runtime_reranker", None):
+        memory.runtime_reranker.close()
     memory.close()
     memory.vector_store.client.close()

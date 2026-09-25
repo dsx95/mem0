@@ -24,6 +24,7 @@
 <aside class="sidebar" id="sidebar">
   <a href="/chat" class="brand"><span class="brand-mark">k<span>·</span></span><span>KNOWIN<small>你的记忆对话空间</small></span></a>
   <button id="new-chat" class="new-chat"><svg><use href="#plus"/></svg>开启新对话<span>↗</span></button>
+  <button id="diary-button" class="new-chat diary-open"><svg><use href="#book"/></svg>查看每日记事<span>↗</span></button>
   <nav class="main-nav"><a class="selected" href="/chat"><svg><use href="#chat"/></svg>记忆对话<span class="nav-dot"></span></a><a href="/"><svg><use href="#stack"/></svg>记忆资料库<small>↗</small></a></nav>
   <div class="history-heading">最近的对话<span id="session-count">0</span></div>
   <div id="session-list" class="session-list" aria-label="对话历史"><p class="sidebar-empty">每次对话，都从这里继续。</p></div>
@@ -64,5 +65,6 @@
   <div class="panel-footer"><span class="status-dot"></span>记忆由 Mem0 持久保存</div>
 </aside>
 <dialog id="identity-dialog"><form id="identity-form"><div class="dialog-heading"><h2>对话身份</h2><button type="button" class="icon" id="close-identity" aria-label="关闭"><svg><use href="#close"/></svg></button></div><p>个人记忆按 user_id 和 family_id 组合保存，同一家庭可读取家庭共享记忆。</p><label>用户 user_id<input id="identity-input" value="chat_default" pattern="[A-Za-z0-9][A-Za-z0-9_.\-]{0,63}" maxlength="64" required autocomplete="off"></label><label>家庭 family_id（选填）<input id="identity-family" pattern="[A-Za-z0-9][A-Za-z0-9_.\-]{0,63}" maxlength="64" autocomplete="off"></label><small>这是本机测试身份，不是账号认证；标识使用字母、数字、点、下划线或短横线。</small><button type="submit" class="dialog-submit">切换到这个身份</button></form></dialog>
+<dialog id="diary-dialog" class="diary-dialog"><div class="dialog-heading"><h2>每日记事</h2><button type="button" class="icon" id="close-diary" aria-label="关闭"><svg><use href="#close"/></svg></button></div><p class="diary-note">按北京时间归档当前用户的对话；完整记录保留在下方，机器整理可能有遗漏。</p><div class="diary-controls"><label>日期 <input id="diary-date" type="date"></label><button type="button" id="diary-refresh">查看</button><button type="button" id="diary-summarize">重新整理</button><a id="diary-download" href="#" download>下载 Markdown</a></div><div id="diary-content" class="diary-content" aria-live="polite"></div></dialog>
 <datalist id="known-users"></datalist>
 </body></html>

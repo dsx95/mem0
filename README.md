@@ -19,6 +19,77 @@ bash start.sh
 后续同一命令直接启动。打开 http://127.0.0.1:18580，聊天页为 /chat；Ctrl+C 停止。
 Coder 请通过工作区私有端口转发访问 18580。默认仅监听回环地址，网页不是多租户鉴权服务。
 
+聊天回答的通用行为写在 `local_runtime/chat.py` 的 `SYSTEM`；基于检索结果生成简短回答的提示词写在
+`local_runtime/grounding.py` 的 `EXTRACT_SYSTEM`。每轮普通对话会先检索当前用户的个人记忆、当前家庭的共享记忆，
+以及已启用的公开资料，再交给 LLM；需要原文核验的问题会强制调用只读检索工具，覆盖相同的授权范围，
+再让 LLM 合并重复内容并给每条陈述附上原文依据。`checked_answer()` 会核对引用 ID、原文片段和回答中的数字、
+单位、网址后才向网页发送回答；这能拦截虚构来源和明显的数值错误，但不能从数学上证明每句概括都与原文语义一致。
+
+同一 `family_id` 的成员共用家庭记忆键；个人记忆键由 `(family_id, user_id)` 生成。保存时由输入区的
+`remember_scope` 决定写入个人还是家庭；普通聊天和需核验的问答都会读取当前个人、当前家庭及已启用的公开资料。
+最近 12 个已完成对话轮次（最多 32000 字符）作为短期上下文；完整对话保存在 `chat.sqlite`，但不会自动
+全部转成 Mem0 向量记忆。长期事实只有在模型实际调用 `remember` 且写入成功后才保存。Mem0 新记录自带 UTC
+`created_at`、`updated_at`，页面按本地时区显示完整时间；旧记录缺失时显示「时间未知」，不会伪造时间。
+
+### 每日记事
+
+每轮对话结束后，会在同一个 `data/dashboard/chat.sqlite` 中写入 `daily_diary_entries`，按北京时间
+`YYYY-MM-DD` 归档当前 `(family_id, user_id)` 的跨会话对话。原始问题、回答、状态和本轮新增长期记忆都保留；
+`daily_diaries` 保存 LLM 生成的当日摘要与明确的新偏好。摘要在后台整理，失败也不会丢原始对话；
+同一天再有新对话会重新整理。旧对话首次启动时回填日记条目，旧日摘要可在页面点「重新整理」生成。
+聊天页「查看每日记事」支持选日期、阅读完整记录、重新整理和下载 Markdown。Agent 可用 `mem0`
+工具的 `diary` 只读操作读取当前用户的指定日期；这份私人日记不自动写入 Qdrant，也不共享给其他家庭成员。
+删除一段对话会同时删除它的日记副本，并使当天摘要失效；已单独写入 Mem0 的长期记忆仍会保留。
+日记整理使用当前配置的 LLM，可能产生额外 API 费用；如需关闭后台自动整理，可设置
+`MEM0_DIARY_AUTO_SUMMARY=false`，手动整理仍可用。日记摘要不是原始证据，重要事实应回看完整记录。
+
+### 可选 Qwen 重排序
+
+编辑实际启动使用的 `config/qwen.env`（`--profile openai` 则是 `config/openai.env`）：
+
+```dotenv
+MEM0_RERANK_ENABLED=false
+MEM0_RERANK_MODEL=qwen3-rerank
+MEM0_RERANK_URL=https://dashscope.aliyuncs.com/compatible-api/v1/reranks
+MEM0_RERANK_API_KEY=
+MEM0_RERANK_TIMEOUT=3
+MEM0_RERANK_CANDIDATES=30
+MEM0_RERANK_TOP_N=8
+```
+
+将 `false` 改成 `true` 并重启服务即可开启。默认关闭，不增加模型请求；无需重建向量库。
+Qwen 北京预设、上述百炼地址可自动复用 `MEM0_PROVIDER_API_KEY`；其他平台或自定义地址必须显式填写
+`MEM0_RERANK_API_KEY`，不会把 OpenAI Key 自动发送给百炼。新业务空间可以把 URL 改为
+`https://<WorkspaceId>.cn-beijing.maas.aliyuncs.com/compatible-api/v1/reranks`，Key 必须具有该空间的调用权限。
+不要填 `/chat/completions` 或旧的 `text-rerank` 接口；当前适配的是 `qwen3-rerank` 的顶层 `results` 协议。
+
+聊天检索先按用户/家庭/资料范围过滤，扩大各路候选并合并，再把最多 30 条候选发送给重排序 API，
+返回前 8 条；这些值由上述配置控制。API 序号必须落在本次候选列表内，结果保留本地 ID、时间和来源。
+排序 HTTP 请求在数据库锁之外执行；使用连接池、单阶段 3 秒超时且不重试、不跟随跳转。
+超时、限流、鉴权失败或无效响应都会回退到本次候选的原排序，聊天工具卡片显示回退状态。
+返回的 `rerank_score` 与原始 `score` 分开保存，不再用旧分数覆盖重排次序。
+
+网页语义搜索、`python -m local_runtime search` 和资料 `search/shell` 同样支持此开关；
+它们的输出数量沿用请求的 `limit/top_k`，`MEM0_RERANK_TOP_N` 只控制聊天结果数量。
+日记按日期读取、关键词浏览和资料导入不调用排序 API。直接绕过 local_runtime 调用原生 `Memory.search()`
+不会自动读取这个开关。长文本会使用受预算限制的前缀参与排序，原文不修改；返回 `input_truncated` 供诊断。
+排序只衡量相关性，不自动处理新旧事实冲突，也不保证每次请求都返回足够相关的证据。
+
+```bash
+# 仅查看配置，Key 不会显示，也不调用模型。
+.venv/bin/python -m local_runtime --env-file config/qwen.env config
+# 开启开关并配置 Key 后，用合成文本验证排序 API；会产生模型调用。
+.venv/bin/python -m local_runtime --env-file config/qwen.env check --component rerank
+```
+
+协议来源：[百炼排序接口](https://help.aliyun.com/zh/model-studio/text-rerank-api)、
+[百炼默认北京地址示例](https://help.aliyun.com/en/polardb/polardb-for-postgresql/use-polarsearch-to-build-a-rag-based-solution)。
+产品化差距和建议验收条件见 [产品化评估](local_runtime/PRODUCTION_REVIEW.md)。
+
+当前网页是本机单所有者控制台：`user_id` 和 `family_id` 由页面填写，尚无账号认证与家庭成员关系校验。
+因此这些键只提供检索范围隔离，不能防止有权打开控制台的人冒用其他身份；不要直接将本网页开放给互不信任的家庭成员。
+多用户上线前必须由可信登录态确定 `user_id`，在服务端核验 `family_id` 成员关系，并限制管理总览接口。
+
 ```bash
 bash start.sh --doctor             # 安装/检查环境，不启动服务，不调用云端 API
 bash start.sh --port 18581          # 更换端口

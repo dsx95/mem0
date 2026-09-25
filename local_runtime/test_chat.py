@@ -4,6 +4,7 @@ import sqlite3
 import threading
 import time
 import uuid
+from datetime import datetime, timezone
 from types import SimpleNamespace as NS
 
 import pytest
@@ -17,9 +18,17 @@ HEADERS = {"X-Memory-Client": "dashboard"}
 
 
 class Memory(TestMemory):
+    def add(self, text, user_id, infer, metadata):
+        result = super().add(text, user_id, infer, metadata)
+        stamp = datetime.now(timezone.utc).isoformat()
+        self.client.set_payload(self.settings.collection, {"created_at": stamp, "updated_at": stamp},
+                                points=[result["results"][0]["id"]])
+        return result
+
     def search(self, text, filters, top_k):
         rows, _ = self.client.scroll(self.settings.collection, limit=100)
-        return {"results": [{"id": str(row.id), "memory": row.payload["data"], "score": .9, "metadata": {}}
+        return {"results": [{"id": str(row.id), "memory": row.payload["data"], "score": .9, "metadata": {},
+                             "created_at": row.payload.get("created_at"), "updated_at": row.payload.get("updated_at")}
                             for row in rows if row.payload.get("user_id") == filters["user_id"]][:top_k]}
 
 
@@ -90,7 +99,8 @@ def test_real_protocol_streamed_tool_ids_and_persisted_new_session(console):
     sid = session(client)
     events = message(client, sid)
     assert events[-1]["status"] == "complete"
-    assert [event["type"] for event in events].count("tool_end") == 1
+    assert [event["type"] for event in events].count("tool_end") == 2
+    assert any(event["type"] == "tool_end" and event["event"].get("automatic") for event in events)
     assert model.calls[0]["tool_choice"] == "auto"
     tool = model.calls[1]["messages"][-1]
     assert tool["role"] == "tool" and tool["tool_call_id"] == "call-one"
@@ -101,7 +111,7 @@ def test_real_protocol_streamed_tool_ids_and_persisted_new_session(console):
     assert memory["total"] == 1 and memory["items"][0]["text"] == "喜欢喝茶"
     assert len(service.snapshot()) == 26
     detail = client.get(f"/api/chat/sessions/{sid}").json()
-    assert detail["turns"][0]["events"][0]["result"]["saved"]
+    assert any(event["result"].get("saved") for event in detail["turns"][0]["events"])
     assert "never-return-me" not in json.dumps(detail)
 
 
@@ -140,7 +150,7 @@ def test_unknown_tool_and_provider_failure_are_visible_and_redacted(console):
     chat.client_factory = lambda: model
     sid = session(client)
     events = message(client, sid)
-    assert next(e for e in events if e["type"] == "tool_end")["event"]["result"]["error"] == "未知工具"
+    assert next(e for e in events if e["type"] == "tool_end" and not e["event"].get("automatic"))["event"]["result"]["error"] == "未知工具"
     chat.client_factory = lambda: Model([RuntimeError("never-return-me private error")])
     events = message(client, sid)
     assert events[-1]["status"] == "failed"
@@ -169,7 +179,7 @@ def test_no_tool_hallucinated_write_is_not_executed_and_delete_preserves_memory(
     chat.client_factory = lambda: Model([[chunk("你好！"), chunk(finish="stop")]])
     sid = session(client)
     events = message(client, sid, "你好")
-    assert not any(e["type"].startswith("tool_") for e in events)
+    assert all(e["event"].get("automatic") for e in events if e["type"].startswith("tool_"))
     assert service.memory.add_calls == 0
     assert client.delete(f"/api/chat/sessions/{sid}", headers=HEADERS).status_code == 200
     assert client.get(f"/api/chat/sessions/{sid}").status_code == 404
@@ -216,6 +226,55 @@ def test_family_shared_and_member_private_scopes(console):
     assert len(rows) == 1 and rows[0]["scope"] == "family"
     listed = client.get("/api/chat/sessions?user_id=alice&family_id=home1").json()["items"]
     assert [r["id"] for r in listed] == [alice["id"]]
+
+
+def test_every_ordinary_turn_prefetches_only_current_member_and_family(console):
+    client, chat, _ = console
+    alice = chat.session(session(client, user_id="alice", family_id="home1", use_library=False))
+    bob = chat.session(session(client, user_id="bob", family_id="home1", use_library=False))
+    other_home = chat.session(session(client, user_id="alice", family_id="home2", use_library=False))
+    chat.execute(alice, {"action": "remember", "text": "Alice 私人事实"})
+    chat.execute(bob, {"action": "remember", "text": "Bob 私人事实"})
+    chat.execute(other_home, {"action": "remember", "text": "另一个家庭的私人事实"})
+    chat.execute({**alice, "remember_scope": "family"}, {"action": "remember", "text": "本家庭共享事实"})
+    chat.execute({**other_home, "remember_scope": "family"}, {"action": "remember", "text": "另一个家庭共享事实"})
+    model = Model([[chunk("好的"), chunk(finish="stop")]])
+    chat.client_factory = lambda: model
+    assert message(client, alice["id"], "你好")[-1]["status"] == "complete"
+    tool_result = next(item for item in model.calls[0]["messages"] if item["role"] == "tool")
+    retrieved = json.loads(tool_result["content"])
+    assert {(row["scope"], row["text"]) for row in retrieved["memories"]} == {
+        ("personal", "Alice 私人事实"), ("family", "本家庭共享事实")}
+    assert all(datetime.fromisoformat(row["created_at"]).tzinfo for row in retrieved["memories"])
+
+
+def test_memory_and_chat_timestamps_are_exposed(console):
+    client, chat, _ = console
+    sid = session(client, user_id="alice", family_id="home1", use_library=False)
+    current = chat.session(sid)
+    chat.execute(current, {"action": "remember", "text": "带时间的个人记忆"})
+    memory = client.get(f"/api/chat/sessions/{sid}/memories").json()["items"][0]
+    assert datetime.fromisoformat(memory["created_at"]).tzinfo
+    assert datetime.fromisoformat(memory["updated_at"]).tzinfo
+    chat.client_factory = lambda: Model([[chunk("好的"), chunk(finish="stop")]])
+    message(client, sid, "你好")
+    turn = client.get(f"/api/chat/sessions/{sid}").json()["turns"][0]
+    assert datetime.fromisoformat(turn["created_at"]).tzinfo
+
+
+def test_combined_search_keeps_private_shared_and_document_results(console):
+    client, chat, service = console
+    current = chat.session(session(client, user_id="alice", family_id="home1"))
+    chat.execute(current, {"action": "remember", "text": "个人偏好：喝无糖拿铁"})
+    chat.execute({**current, "remember_scope": "family"},
+                 {"action": "remember", "text": "家庭约定：周六聚餐"})
+    for index in range(15):
+        service.memory.add(f"公开资料：第 {index} 条家庭产品说明", user_id="knowin_public", infer=False,
+                           metadata={"source_file": f"资料{index}.txt"})
+    service.refresh()
+    result = chat.execute(current, {"action": "search", "text": "结合我的偏好、家庭约定和资料", "scope": "all"})
+    assert {row["scope"] for row in result["memories"]} == {"personal", "family", "library"}
+    assert result["count"] <= 8
 
 
 def test_message_identity_is_validated_persisted_and_passed_to_model(console):
@@ -271,13 +330,13 @@ def test_legacy_database_keeps_history_and_original_memory_binding(tmp_path):
 @pytest.mark.parametrize("finish", ["tool_calls", "stop"])
 def test_robot_payload_question_requires_real_library_tool_call(console, finish):
     client, chat, service = console
-    model = Model([function({"action": "search", "text": "Knowin-X1 双臂最大负载", "scope": "library"}, finish=finish),
+    model = Model([function({"action": "search", "text": "Knowin-X1 双臂最大负载", "scope": "all"}, finish=finish),
         [chunk("资料中未找到该参数。"), chunk(finish="stop")]])
     chat.client_factory = lambda: model
     sid = session(client)
     events = message(client, sid, "你的双臂可以拎多少kg的重物")
     assert model.calls[0]["tool_choice"] == {"type": "function", "function": {"name": "mem0"}}
-    assert any(e["type"] == "tool_end" and e["event"]["arguments"]["scope"] == "library" for e in events)
+    assert any(e["type"] == "tool_end" and e["event"]["arguments"]["scope"] == "all" for e in events)
     assert service.memory.add_calls == 0
     model = Model([[chunk("资料库未启用，无法核实参数。"), chunk(finish="stop")]])
     chat.client_factory = lambda: model

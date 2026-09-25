@@ -1,6 +1,8 @@
 const $ = id => document.getElementById(id);
-const state = {user: localStorage.getItem('knowin-chat-user') || 'chat_default', family: localStorage.getItem('knowin-chat-family') || '', users: [], session: null, busy: false, epoch: 0, recovered: null};
+const state = {user: localStorage.getItem('knowin-chat-user') || 'chat_default', family: localStorage.getItem('knowin-chat-family') || '', users: [], session: null, busy: false, epoch: 0, recovered: null, diaryStatus: '', diaryEpoch: 0};
 const escape = text => String(text ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const timestamp = value => {if(!value)return '时间未知';const date=new Date(value);return Number.isNaN(date.getTime())?'时间未知':date.toLocaleString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});};
+const diaryTimestamp = value => {if(!value)return '时间未知';const date=new Date(value);return Number.isNaN(date.getTime())?'时间未知':date.toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});};
 const icon = name => `<svg aria-hidden="true"><use href="#${name}"/></svg>`;
 const emptyMemories = $('personal-memories').innerHTML;
 let activeTurn = null;
@@ -21,6 +23,7 @@ function showIdentity(){
   $('user-id').value=state.user;$('family-id').value=state.family;
   $('identity-label').textContent=state.user+(state.family?' · '+state.family:'');
   const readOnly=state.user==='knowin_public';
+  $('diary-button').disabled=readOnly;
   document.querySelector('.panel-heading h2').firstChild.textContent=readOnly?'公开资料 ':'个人与家庭记忆 ';
   $('identity-context').textContent=readOnly?'当前：knowin_public · 公开资料只读，保存记忆请切换个人用户':`当前：${state.user}${state.family?' / '+state.family:' / 无家庭'} · 身份会随每条消息发送`;
   $('family-id').disabled=state.busy || readOnly;$('remember-scope').disabled=state.busy || readOnly;$('library-toggle').disabled=state.busy || readOnly;
@@ -77,10 +80,11 @@ async function sessions(){
 function toolCard(event){
   const details=document.createElement('details'); details.className='tool-card '+event.status; details.dataset.call=event.id;
   const action=event.arguments?.action, remember=action==='remember';
-  const name=remember?(event.result?.scope==='family'?'保存家庭共享记忆':'保存一条记忆'):event.arguments?.scope==='library'?'检索资料原文':'查找相关记忆';
+  const name=action==='diary'?'查看每日记事':remember?(event.result?.scope==='family'?'保存家庭共享记忆':'保存一条记忆'):event.arguments?.scope==='library'?'检索资料原文':'查找相关记忆';
   const count=event.result?.memories?.length;
-  const caption=event.status==='running'?'进行中':event.status==='error'?'未完成':remember?'已保存':`找到 ${count ?? 0} 条`;
-  details.innerHTML=`<summary>${icon(remember?'spark':'search')}<span>${name}</span><span class="tool-caption">${escape(caption)}</span></summary><div class="tool-data"><label>调用 ${escape(event.name || 'mem0')}</label><pre>${escape(JSON.stringify(event.arguments,null,2))}</pre>${event.result?'<label>返回结果</label><pre>'+escape(JSON.stringify(event.result,null,2))+'</pre>':''}</div>`;
+  const caption=event.status==='running'?'进行中':event.status==='error'?'未完成':action==='diary'?`${event.result?.turn_count ?? 0} 轮对话`:remember?'已保存':`找到 ${count ?? 0} 条`;
+  const ranking=event.result?.rerank?.status,rankingCaption=ranking==='applied'?' · 已重排':ranking==='fallback'?' · 重排失败，使用原排序':'';
+  details.innerHTML=`<summary>${icon(remember?'spark':'search')}<span>${name}</span><span class="tool-caption">${escape(caption+rankingCaption)}</span></summary><div class="tool-data"><label>调用 ${escape(event.name || 'mem0')}</label><pre>${escape(JSON.stringify(event.arguments,null,2))}</pre>${event.result?'<label>返回结果</label><pre>'+escape(JSON.stringify(event.result,null,2))+'</pre>':''}</div>`;
   return details;
 }
 function renderGrounding(el, grounding={}){
@@ -103,7 +107,7 @@ function renderTurn(turn){
   el.querySelector('.answer').innerHTML=markdown(turn.answer || '');
   for(const event of turn.events || []) el.querySelector('.tool-events').append(toolCard(event));
   if(turn.error){el.querySelector('.turn-error').hidden=false;el.querySelector('.turn-error').textContent=turn.error;}
-  if(turn.status==='complete') el.querySelector('.turn-meta').textContent='已保存到对话';
+  el.querySelector('.turn-meta').textContent=(turn.status==='complete'?'已保存到对话 · ':'')+timestamp(turn.created_at);
   renderGrounding(el,turn.grounding);
   $('messages').append(el);return el;
 }
@@ -111,7 +115,29 @@ async function memories(){
   if(!state.session){$('personal-memories').innerHTML=emptyMemories;$('memory-count').textContent='0';return;}
   const id=state.session.id;const data=await api('/sessions/'+id+'/memories'); if(state.session?.id!==id)return;
   $('memory-count').textContent=data.total;
-  $('personal-memories').innerHTML=data.items.length?data.items.map(item=>`<article class="memory-card"><span class="memory-scope ${item.scope==='family'?'family':''}">${item.scope==='family'?'家庭共享':item.scope==='library'?'公开资料 · 只读':'个人记忆'}</span><p>${escape(item.text)}</p><small>${item.created_at?new Date(item.created_at).toLocaleDateString('zh-CN',{month:'long',day:'numeric'}):'刚刚'} · 长期记忆</small></article>`).join(''):emptyMemories;
+  $('personal-memories').innerHTML=data.items.length?data.items.map(item=>`<article class="memory-card"><span class="memory-scope ${item.scope==='family'?'family':''}">${item.scope==='family'?'家庭共享':item.scope==='library'?'公开资料 · 只读':'个人记忆'}</span><p>${escape(item.text)}</p><small title="${escape(item.created_at||'')}">创建：${timestamp(item.created_at)}${item.updated_at&&item.updated_at!==item.created_at?' · 更新：'+timestamp(item.updated_at):''} · 长期记忆</small></article>`).join(''):emptyMemories;
+}
+function renderDiary(data){
+  state.diaryStatus=data.summary_status;
+  $('diary-date').value=data.date;
+  $('diary-download').href='/api/chat/sessions/'+encodeURIComponent(state.session.id)+'/diary.md?'+new URLSearchParams({date:data.date});
+  const status={complete:'已整理',pending:'正在等待整理',failed:'整理暂未完成，可点击重新整理',empty:'这一天还没有对话'}[data.summary_status]||data.summary_status;
+  const added=[...new Map(data.entries.flatMap(entry=>entry.new_memories||[]).map(item=>[item.id,item])).values()];
+  $('diary-content').innerHTML=`<div class="diary-status">${escape(data.date)} · ${data.turn_count} 轮对话 · ${escape(status)}</div>
+    <h3>当日整理</h3><p>${escape(data.summary||'完整对话已落盘；摘要生成后会显示在这里。')}</p>
+    <h3>新偏好</h3>${data.new_preferences.length?'<ul>'+data.new_preferences.map(item=>'<li>'+escape(item.text)+' <small>· 对话 '+escape(item.turn_id.slice(0,8))+'</small></li>').join('')+'</ul>':'<p>尚未从对话中确认新的偏好。</p>'}
+    <h3>新增长期记忆</h3>${added.length?'<ul>'+added.map(item=>'<li>'+escape(item.text)+' <small>('+escape(item.scope)+')</small></li>').join('')+'</ul>':'<p>这一天没有新增长期记忆。</p>'}
+    <h3>完整对话记录</h3>${data.entries.length?data.entries.map(entry=>`<article class="diary-entry"><time>${diaryTimestamp(entry.created_at)} · ${escape(entry.status)} · 对话 ${escape(entry.turn_id.slice(0,8))}</time><strong>用户</strong><pre>${escape(entry.user_text)}</pre><strong>助手</strong><pre>${escape(entry.answer||'（无完整回答）')}</pre>${entry.error?'<p class="diary-error">'+escape(entry.error)+'</p>':''}</article>`).join(''):'<p>这一天还没有对话。</p>'}`;
+}
+async function loadDiary(date='today'){
+  if(!state.session)return;
+  const ticket=++state.diaryEpoch;
+  $('diary-content').innerHTML='<p>正在读取日记…</p>';
+  const sid=state.session.id;
+  try{
+    const data=await api('/sessions/'+sid+'/diary?'+new URLSearchParams({date}));
+    if(state.session?.id===sid&&ticket===state.diaryEpoch)renderDiary(data);
+  }catch(e){if(ticket===state.diaryEpoch)$('diary-content').innerHTML='<p class="diary-error">'+escape(e.message)+'</p>';}
 }
 async function loadSession(id){
   if(state.busy){error('请先等待当前回复完成，或点击停止回复。');return;}
@@ -163,7 +189,7 @@ async function send(text){
         if(event.type==='delta'){answer+=event.text;activeTurn.querySelector('.answer').innerHTML=markdown(answer);scroll();}
         if(event.type==='tool_start' || event.type==='tool_end'){
           const parent=activeTurn.querySelector('.tool-events');const previous=[...parent.children].find(el=>el.dataset.call===event.event.id);const next=toolCard(event.event);if(previous){next.open=previous.open;previous.replaceWith(next);}else parent.append(next);
-          $('reply-status').lastElementChild.textContent=event.type==='tool_start'?(event.event.arguments?.action==='remember'?'正在保存记忆…':'正在查找记忆…'):'正在组织回答…';
+          $('reply-status').lastElementChild.textContent=event.type==='tool_start'?(event.event.arguments?.action==='remember'?'正在保存记忆…':event.event.arguments?.action==='diary'?'正在读取日记…':'正在查找记忆…'):'正在组织回答…';
           if(event.type==='tool_end' && event.event.result?.saved)memories().catch(()=>{});scroll();
         }
         if(event.type==='done'){
@@ -199,7 +225,13 @@ $('user-id').onchange=async()=>{
 $('family-id').oninput=()=>{const hasFamily=Boolean($('family-id').value.trim());$('remember-scope').querySelector('[value="family"]').disabled=!hasFamily;if(!hasFamily)$('remember-scope').value='personal';};
 $('stop-button').onclick=async()=>{if(state.session){try{await api('/sessions/'+state.session.id+'/cancel',{method:'POST'});$('reply-status').lastElementChild.textContent='正在停止…';}catch(e){error(e.message);}}};
 $('library-toggle').onchange=async()=>{if(!state.session)return;try{state.session=await api('/sessions/'+state.session.id,{method:'PATCH',body:JSON.stringify({...identityPayload(),use_library:$('library-toggle').checked})});}catch(e){$('library-toggle').checked=Boolean(state.session.use_library);error(e.message);}};
-$('delete-chat').onclick=async()=>{if(!state.session || state.busy)return;if(!confirm('删除这段对话？长期记忆会保留。'))return;try{await api('/sessions/'+state.session.id,{method:'DELETE'});state.session=null;localStorage.removeItem(sessionKey());$('messages').replaceChildren();$('welcome').hidden=false;$('conversation-title').textContent='新的对话';$('delete-chat').hidden=true;await newSession();}catch(e){error(e.message);}};
+$('delete-chat').onclick=async()=>{if(!state.session || state.busy)return;if(!confirm('删除这段对话？对应日记条目会一起移除，长期记忆会保留。'))return;try{await api('/sessions/'+state.session.id,{method:'DELETE'});$('diary-dialog').close();state.session=null;localStorage.removeItem(sessionKey());$('messages').replaceChildren();$('welcome').hidden=false;$('conversation-title').textContent='新的对话';$('delete-chat').hidden=true;await newSession();}catch(e){error(e.message);}};
+$('diary-button').onclick=async()=>{if(state.user==='knowin_public')return;$('diary-dialog').showModal();await loadDiary('today');};
+$('close-diary').onclick=()=>$('diary-dialog').close();
+$('diary-refresh').onclick=()=>loadDiary($('diary-date').value||'today');
+$('diary-date').onchange=()=>$('diary-refresh').click();
+$('diary-summarize').onclick=async()=>{if(!state.session)return;const ticket=++state.diaryEpoch;const button=$('diary-summarize');button.disabled=true;$('diary-content').innerHTML='<p>正在整理当天对话…</p>';try{const data=await api('/sessions/'+state.session.id+'/diary/summarize?'+new URLSearchParams({date:$('diary-date').value||'today'}),{method:'POST'});if(ticket===state.diaryEpoch)renderDiary(data);}catch(e){if(ticket===state.diaryEpoch)$('diary-content').innerHTML='<p class="diary-error">'+escape(e.message)+'</p>';}finally{button.disabled=false;}};
+setInterval(()=>{if($('diary-dialog').open&&state.diaryStatus==='pending'&&!$('diary-summarize').disabled)loadDiary($('diary-date').value||'today');},5000);
 $('identity-button').onclick=()=>{$('identity-input').value=state.user;$('identity-family').value=state.family;$('identity-dialog').showModal();};
 $('close-identity').onclick=()=>$('identity-dialog').close();
 $('identity-input').setAttribute('list','known-users');

@@ -13,7 +13,7 @@ def main():
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("config", help="Print redacted configuration without making requests")
     check = commands.add_parser("check", help="Call the selected real endpoints to check connectivity")
-    check.add_argument("--component", choices=["all", "llm", "embedding"], default="all")
+    check.add_argument("--component", choices=["all", "llm", "embedding", "rerank"], default="all")
     llm = commands.add_parser("llm", help="Call the configured LLM without opening a memory database")
     llm.add_argument("text")
     for name in ("add", "search"):
@@ -35,6 +35,17 @@ def main():
             result = create_llm(settings).generate_response(messages=[{"role": "user", "content": args.text}])
         elif args.command == "check":
             result = {}
+            if args.component in {"rerank", "all"}:
+                from .rerank import Reranker
+                reranker = Reranker(settings.rerank)
+                try:
+                    _, status = reranker.rank("钥匙在哪？", [{"id": "0", "text": "钥匙在书房"},
+                                                         {"id": "1", "text": "喜欢喝茶"}], 2)
+                    result["rerank"] = status
+                    if status["status"] == "fallback":
+                        raise ValueError("Rerank endpoint check failed; check endpoint, key and model permissions")
+                finally:
+                    reranker.close()
             if args.component in {"llm", "all"}:
                 response = create_llm(settings).generate_response(
                     messages=[{"role": "user", "content": 'Return only this JSON object: {"ok": true}'}],
@@ -54,7 +65,10 @@ def main():
                 if args.command == "add":
                     result = memory.add(args.text, user_id=args.user_id, infer=not args.raw)
                 else:
-                    result = memory.search(args.text, filters={"user_id": args.user_id}, top_k=args.top_k)
+                    result = memory.search(args.text, filters={"user_id": args.user_id},
+                                           top_k=memory.runtime_reranker.candidate_limit(args.top_k))
+                    result["results"], result["rerank"] = memory.runtime_reranker.rank(
+                        args.text, result.get("results", []), args.top_k)
             finally:
                 close_memory(memory)
         print(json.dumps(result, ensure_ascii=False, indent=2))

@@ -7,7 +7,7 @@ const statusNames = {queued:'等待处理',parsing:'正在解析',writing:'正�
 const state = {view:'memories',mode:'keyword',kind:'',user:'',source:'',query:'',page:1,total:0,items:[],sources:[],jobs:[],files:[],uploadTab:'files',uploading:false,overview:null,sequence:0};
 let toastTimer;
 function toast(text,error=false){const el=$('#toast');el.textContent=text;el.classList.toggle('error',error);el.hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>el.hidden=true,4500);}
-function date(value){if(!value)return '—';const d=new Date(value);return Number.isNaN(d.getTime())?'—':d.toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false});}
+function date(value){if(!value)return '时间未知';const d=new Date(value);return Number.isNaN(d.getTime())?'时间未知':d.toLocaleString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});}
 function seconds(value){const n=Number(value||0);return `${String(Math.floor(n/60)).padStart(2,'0')}:${String(Math.floor(n%60)).padStart(2,'0')}`;}
 function bytes(n){return n>=1024*1024?`${(n/1024/1024).toFixed(1)} MB`:`${Math.max(1,Math.round(n/1024))} KB`;}
 function location(meta){if(meta.start_seconds!==undefined)return `${seconds(meta.start_seconds)}–${seconds(meta.end_seconds)}`;if(meta.page_start)return `第 ${meta.page_start} 页`;if(meta.extraction_method==='docx_text')return '正文 / 无页码';if(meta.tile_index!==undefined)return `图块 ${meta.tile_index+1}`;return '';}
