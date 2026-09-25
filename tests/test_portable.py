@@ -10,7 +10,7 @@ from qdrant_client import models
 from local_runtime.dashboard import create_app
 from local_runtime.materials import chunk_records, existing_chunks, write_json
 from local_runtime.portable_paths import LEGACY_DATA, LEGACY_MATERIALS, map_metadata, map_path
-from local_runtime.test_dashboard import TestMemory
+from local_runtime.test_dashboard import TestMemory, login
 
 
 def test_storage_identity_survives_move(tmp_path, monkeypatch):
@@ -46,6 +46,7 @@ def test_legacy_previews_and_dedup(tmp_path, monkeypatch):
     )
     app = create_app(settings, root, memory_factory=TestMemory)
     with TestClient(app) as http:
+        login(http, "alice")
         service = app.state.service
         identity = str(uuid.uuid4())
         service.memory.client.upsert(

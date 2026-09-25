@@ -62,6 +62,10 @@ class TestMemory:
         payload = dict(self.client.retrieve(self.settings.collection, [memory_id], with_payload=True)[0].payload)
         return {"id": memory_id, "memory": payload.pop("data"), "metadata": payload}
 
+    def delete(self, memory_id):
+        self.client.delete(self.settings.collection, [memory_id])
+        return {"message": "deleted"}
+
     def history(self, memory_id):
         return [{"event": "ADD", "created_at": "2026-09-18"}]
 
@@ -84,8 +88,18 @@ def settings(tmp_path):
 def console(settings, tmp_path):
     app = create_app(settings, tmp_path / "sources", memory_factory=TestMemory, max_upload_mb=1)
     with TestClient(app) as client:
+        login(client, "alice")
         yield client, app.state.service
     assert app.state.service.memory.closed
+
+
+def login(client, user="alice"):
+    if user not in {u["user_id"] for u in client.get("/api/identity/users").json()["items"]}:
+        response = client.post("/api/identity/users", headers=HEADERS, json={"user_id": user})
+        assert response.status_code == 201, response.text
+    response = client.post("/api/identity/select", headers=HEADERS, json={"user_id": user})
+    assert response.status_code == 200, response.text
+    return response.json()
 
 
 def finish(client, job_id):
@@ -98,7 +112,8 @@ def finish(client, job_id):
     pytest.fail("Import worker did not finish")
 
 
-def upload(client, name, content=b"New searchable memory", user="knowin_public"):
+def upload(client, name, content=b"New searchable memory", user="alice"):
+    login(client, user)
     response = client.post("/api/uploads", params={"filename": name, "user_id": user}, content=content, headers=HEADERS)
     assert response.status_code == 202, response.text
     return finish(client, response.json()["id"])
@@ -126,11 +141,11 @@ def test_text_page_preview_uses_rendered_pdf_with_path_boundary(console, tmp_pat
 def test_existing_memories_pagination_user_filter_and_semantic_search(console):
     client, service = console
     overview = client.get("/api/overview")
-    assert overview.json()["total"] == 25
+    assert overview.json()["total"] == 12
     assert "never-send-this" not in overview.text
-    pages = [client.get("/api/memories", params={"page": n}).json()["items"] for n in (1, 2, 3)]
-    assert [len(p) for p in pages] == [12, 12, 1]
-    assert len({i["id"] for page in pages for i in page}) == 25
+    pages = [client.get("/api/memories", params={"page": n, "page_size": 5}).json()["items"] for n in (1, 2, 3)]
+    assert [len(p) for p in pages] == [5, 5, 2]
+    assert len({i["id"] for page in pages for i in page}) == 12
     alice = client.get("/api/memories", params={"user_id": "alice"}).json()
     assert alice["total"] == 12 and all(i["user_id"] == "alice" for i in alice["items"])
     results = client.get("/api/search", params={"q": "记忆", "user_id": "alice"}).json()["items"]
@@ -149,7 +164,7 @@ def test_upload_repeat_and_renamed_file_skip_without_model_writes(console):
     assert second["skipped"] == third["skipped"] == 1
     assert first["path"] == third["path"]
     assert service.memory.add_calls == 1
-    assert client.get("/api/overview").json()["total"] == 26
+    assert client.get("/api/overview").json()["total"] == 13
     assert len(client.get("/api/jobs").json()["items"]) == 3
     assert len(client.get("/api/sources").json()["items"]) == 1
 
@@ -239,10 +254,11 @@ def test_interrupted_job_resumes_from_persisted_queue(settings, tmp_path):
     service = first.state.service
     temp = service.directory / "test.part"
     temp.write_bytes(b"recover after restart")
-    job = service.accept(temp, "recover.txt", hashlib.sha256(temp.read_bytes()).hexdigest(), temp.stat().st_size, "kb")
+    job = service.accept(temp, "recover.txt", hashlib.sha256(temp.read_bytes()).hexdigest(), temp.stat().st_size, "alice", {"owner_user_id": "alice"})
     service.save_job(job["id"], status="writing", message="interrupted")
     second = create_app(settings, tmp_path / "sources", memory_factory=TestMemory)
     with TestClient(second) as client:
+        login(client, "alice")
         restored = finish(client, job["id"])
         assert restored["status"] == "complete" and restored["added"] == 1
         assert len(client.get("/api/jobs").json()["items"]) == 1

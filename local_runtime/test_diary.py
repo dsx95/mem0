@@ -6,6 +6,8 @@ from types import SimpleNamespace as NS
 from zoneinfo import ZoneInfo
 
 from local_runtime.diary import diary_date
+from local_runtime.access import Access
+from local_runtime.test_dashboard import login
 from local_runtime.test_chat import Model, chunk, function, message, session
 
 pytest_plugins = ("local_runtime.test_chat",)
@@ -39,7 +41,9 @@ def test_diary_collects_all_sessions_and_new_memories_but_stays_private(console)
     assert [entry["user_text"] for entry in result["entries"]] == ["请记住：我喜欢无糖拿铁", "明天见"]
     assert result["entries"][0]["new_memories"][0]["text"] == "我喜欢无糖拿铁"
     assert result["summary_status"] == "pending"
+    login(client, "bob")
     assert client.get(f"/api/chat/sessions/{bob}/diary").json()["turn_count"] == 1
+    login(client, "alice")
     assert client.get(f"/api/chat/sessions/{other_home}/diary").json()["turn_count"] == 1
     assert chat.execute(chat.session(bob), {"action": "diary", "text": "today"})["turn_count"] == 1
     assert "请记住" not in json.dumps(chat.execute(chat.session(bob), {"action": "diary", "text": "today"}), ensure_ascii=False)
@@ -90,7 +94,9 @@ def test_background_summary_failure_keeps_raw_diary_and_can_retry(tmp_path):
     from datetime import timezone
 
     settings = NS(diary_auto_summary=True, llm=NS(model="fake"), max_tokens=1024, preset="qwen")
-    dashboard = NS(directory=tmp_path, settings=settings, snapshot=lambda: [])
+    access = Access(tmp_path / "chat.sqlite")
+    access.register("alice", "Alice")
+    dashboard = NS(directory=tmp_path, settings=settings, snapshot=lambda: [], access=access)
     chat = Chat(dashboard)
     current = chat.create(SessionInput(user_id="alice"))
 

@@ -1,49 +1,54 @@
 const $ = id => document.getElementById(id);
-const state = {user: localStorage.getItem('knowin-chat-user') || 'chat_default', family: localStorage.getItem('knowin-chat-family') || '', users: [], session: null, busy: false, epoch: 0, recovered: null, diaryStatus: '', diaryEpoch: 0};
+const state = {user: localStorage.getItem('knowin-chat-user') || 'chat_default', family: localStorage.getItem('knowin-chat-family') || '', device: localStorage.getItem('knowin-chat-device') || '', me: null, users: [], session: null, busy: false, epoch: 0, recovered: null, diaryStatus: '', diaryEpoch: 0};
 const escape = text => String(text ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const timestamp = value => {if(!value)return '时间未知';const date=new Date(value);return Number.isNaN(date.getTime())?'时间未知':date.toLocaleString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});};
 const diaryTimestamp = value => {if(!value)return '时间未知';const date=new Date(value);return Number.isNaN(date.getTime())?'时间未知':date.toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});};
 const icon = name => `<svg aria-hidden="true"><use href="#${name}"/></svg>`;
 const emptyMemories = $('personal-memories').innerHTML;
 let activeTurn = null;
-const sessionKey = () => 'knowin-chat-session-v2-'+JSON.stringify([state.user,state.family]);
-const identityPayload = () => ({user_id:state.user,family_id:state.family});
-function ensureUserOption(user){if(![...$('user-id').options].some(option=>option.value===user))$('user-id').add(new Option(user,user),$('user-id').querySelector('[value="__new_user__"]'));}
+const sessionKey = () => 'knowin-chat-session-v3-'+JSON.stringify([state.user,state.family,state.device]);
+const identityPayload = () => ({user_id:state.user,family_id:state.family,device_id:state.device});
+async function identityApi(path,body){
+  const response=await fetch('/api/identity/'+path,body?{method:'POST',headers:{'Content-Type':'application/json','X-Memory-Client':'dashboard'},body:JSON.stringify(body)}:{});
+  const data=await response.json();if(!response.ok)throw new Error(typeof data.detail==='string'?data.detail:'请先选择用户');return data;
+}
+function ensureUserOption(user){if(![...$('user-id').options].some(option=>option.value===user))$('user-id').add(new Option(user,user));}
+function contextOptions(family=state.family,device=state.device){
+  $('family-id').replaceChildren(new Option('个人空间 / 无家庭',''),...state.me.families.map(f=>new Option(f.name,f.family_id)));
+  $('family-id').value=family;
+  $('device-id').replaceChildren(new Option('未标记设备',''),...state.me.devices.filter(d=>d.family_id===family).map(d=>new Option(d.name,d.device_id)));
+  $('device-id').value=device;
+}
 async function users(){
-  const selected=$('user-id').value || state.user;const data=await api('/users');state.users=data.items;
-  $('user-id').replaceChildren();$('known-users').replaceChildren();
-  for(const item of data.items){
-    const label=item.user_id+' · '+item.memory_count+' 条'+(item.read_only?' · 公开资料 / 只读':'');
-    $('user-id').add(new Option(label,item.user_id));$('known-users').append(new Option(label,item.user_id));
-  }
-  ensureUserOption(state.user);ensureUserOption(selected);$('user-id').add(new Option('＋ 输入新用户 ID…','__new_user__'));$('user-id').value=selected;
+  const data=await identityApi('users');state.users=data.items;
+  $('user-id').replaceChildren(...data.items.map(item=>new Option(item.name+' ('+item.user_id+')',item.user_id)));
+  $('user-id').value=state.user;
 }
 function showIdentity(){
-  ensureUserOption(state.user);
-  $('user-id').value=state.user;$('family-id').value=state.family;
-  $('identity-label').textContent=state.user+(state.family?' · '+state.family:'');
-  const readOnly=state.user==='knowin_public';
-  $('diary-button').disabled=readOnly;
-  document.querySelector('.panel-heading h2').firstChild.textContent=readOnly?'公开资料 ':'个人与家庭记忆 ';
-  $('identity-context').textContent=readOnly?'当前：knowin_public · 公开资料只读，保存记忆请切换个人用户':`当前：${state.user}${state.family?' / '+state.family:' / 无家庭'} · 身份会随每条消息发送`;
-  $('family-id').disabled=state.busy || readOnly;$('remember-scope').disabled=state.busy || readOnly;$('library-toggle').disabled=state.busy || readOnly;
-  const familyOption=$('remember-scope').querySelector('[value="family"]');familyOption.disabled=!state.family;
+  ensureUserOption(state.user);$('user-id').value=state.user;contextOptions();
+  $('identity-label').textContent=state.user+(state.family?' · '+state.family:'')+(state.device?' · '+state.device:'');
+  $('identity-context').textContent=`当前：${state.user} / ${state.family||'个人空间'} / ${state.device||'未标记设备'} · 私人对话不会与家庭成员共享`;
+  ['family-id','device-id','remember-scope','library-toggle'].forEach(id=>$(id).disabled=state.busy);
+  $('remember-scope').querySelector('[value="family"]').disabled=!state.family;
   if(!state.family)$('remember-scope').value='personal';
 }
 async function applyIdentity(){
   if(state.busy)return false;
-  $('user-id').value=$('user-id').value.trim();$('family-id').value=$('family-id').value.trim();
-  if(!$('user-id').reportValidity() || !$('family-id').reportValidity())return false;
-  const user=$('user-id').value,family=$('family-id').value;
-  if(user===state.user && family===state.family)return true;
-  const previous={user:state.user,family:state.family,session:state.session};
-  state.user=user;state.family=family;state.session=null;
-  try{await newSession();localStorage.setItem('knowin-chat-user',user);localStorage.setItem('knowin-chat-family',family);showIdentity();return true;}
-  catch(e){Object.assign(state,previous);showIdentity();throw e;}
+  const user=$('user-id').value;let family=$('family-id').value,device=$('device-id').value;
+  if(user===state.user&&family===state.family&&device===state.device)return true;
+  if(user!==state.user){
+    state.me=await identityApi('select',{user_id:user});
+    if(!state.me.families.some(f=>f.family_id===family))family='';
+    if(!state.me.devices.some(d=>d.device_id===device&&d.family_id===family))device='';
+  }
+  state.user=user;state.family=family;state.device=device;state.session=null;state.epoch++;state.diaryEpoch++;
+  $('diary-dialog').close();$('messages').replaceChildren();$('personal-memories').replaceChildren();
+  localStorage.setItem('knowin-chat-user',user);localStorage.setItem('knowin-chat-family',family);localStorage.setItem('knowin-chat-device',device);
+  showIdentity();await newSession();return true;
 }
 
 async function api(path, options = {}) {
-  const response = await fetch('/api/chat' + path, {...options, headers:{'Content-Type':'application/json','X-Memory-Client':'dashboard',...options.headers}});
+  const response = await fetch('/api/chat' + path, {...options, headers:{'Content-Type':'application/json','X-Memory-Client':'dashboard','X-Memory-User':state.user,...options.headers}});
   if (!response.ok) {const body = await response.json().catch(()=>({})); throw new Error(typeof body.detail === 'string' ? body.detail : `请求失败（${response.status}）`);}
   return response.json();
 }
@@ -66,7 +71,7 @@ function busy(value) {
   state.busy=value; $('stop-button').hidden=!value; $('send-button').hidden=value;
   $('send-button').disabled=value || !$('message-input').value.trim(); $('reply-status').hidden=!value;
   $('library-toggle').disabled=value; $('identity-button').disabled=value; $('delete-chat').disabled=value;
-  ['user-id','family-id','remember-scope','apply-identity'].forEach(id=>$(id).disabled=value);
+  ['user-id','family-id','device-id','remember-scope','apply-identity'].forEach(id=>$(id).disabled=value);
   if(state.user==='knowin_public'){['family-id','remember-scope','library-toggle'].forEach(id=>$(id).disabled=true);}
 }
 function closePanels(){document.body.classList.remove('show-sidebar','show-memory');$('shade').hidden=true;}
@@ -103,7 +108,7 @@ function renderGrounding(el, grounding={}){
 function renderTurn(turn){
   const el=document.createElement('article');el.className='turn';el.dataset.turn=turn.id || '';
   el.innerHTML=`<div class="user-message">${escape(turn.user_text)}</div><div class="assistant-message"><span class="assistant-mark">${icon('spark')}</span><div class="assistant-body"><div class="assistant-name">KNOWIN</div><div class="tool-events"></div><div class="answer"></div><div class="grounding" hidden></div><div class="turn-error" hidden></div><div class="turn-meta"></div></div></div>`;
-  if(turn.input_context?.user_id){const label=document.createElement('div');label.className='message-context';label.textContent=turn.input_context.user_id+(turn.input_context.family_id?' / '+turn.input_context.family_id:'')+' · '+(turn.input_context.user_id==='knowin_public'?'公开资料 · 只读':turn.input_context.remember_scope==='family'?'可保存到家庭共享':'可保存到个人记忆');el.prepend(label);}
+  if(turn.input_context?.user_id){const label=document.createElement('div');label.className='message-context';label.textContent=turn.input_context.user_id+(turn.input_context.family_id?' / '+turn.input_context.family_id:'')+(turn.input_context.device_id?' / '+turn.input_context.device_id:' / 未标记设备')+' · '+(turn.input_context.user_id==='knowin_public'?'公开资料 · 只读':turn.input_context.remember_scope==='family'?'可保存到家庭共享':'可保存到个人记忆');el.prepend(label);}
   el.querySelector('.answer').innerHTML=markdown(turn.answer || '');
   for(const event of turn.events || []) el.querySelector('.tool-events').append(toolCard(event));
   if(turn.error){el.querySelector('.turn-error').hidden=false;el.querySelector('.turn-error').textContent=turn.error;}
@@ -142,8 +147,9 @@ async function loadDiary(date='today'){
 async function loadSession(id){
   if(state.busy){error('请先等待当前回复完成，或点击停止回复。');return;}
   const epoch=++state.epoch;const session=await api('/sessions/'+id);if(epoch!==state.epoch)return;
-  if(session.user_id!==state.user || (session.family_id || '')!==state.family)throw new Error('此对话属于另一个身份，请切换 user_id 和 family_id 后查看。');
+  if(session.user_id!==state.user || (session.family_id || '')!==state.family || (session.device_id || '')!==state.device)throw new Error('此对话属于另一个身份，请切换到对应用户、家庭和设备后查看。');
   state.session=session;localStorage.setItem(sessionKey(),id);showIdentity();
+  history.replaceState(null,'','/chat?session='+encodeURIComponent(id));
   $('conversation-title').textContent=session.title;$('delete-chat').hidden=false;
   $('library-toggle').checked=Boolean(session.use_library);$('messages').replaceChildren();
   $('welcome').hidden=session.turns.length>0;
@@ -175,7 +181,7 @@ async function send(text){
   activeTurn=renderTurn({user_text:text,answer:'',events:[],status:'running',input_context:inputContext});scroll(true);
   let answer='', completed=false;
   try{
-    const response=await fetch('/api/chat/sessions/'+id+'/messages',{method:'POST',headers:{'Content-Type':'application/json','X-Memory-Client':'dashboard'},body:JSON.stringify({text,request_id:crypto.randomUUID(),...inputContext})});
+    const response=await fetch('/api/chat/sessions/'+id+'/messages',{method:'POST',headers:{'Content-Type':'application/json','X-Memory-Client':'dashboard','X-Memory-User':state.user},body:JSON.stringify({text,request_id:crypto.randomUUID(),...inputContext})});
     if(!response.ok){const payload=await response.json();throw new Error(typeof payload.detail==='string'?payload.detail:'发送失败');}
     const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='';
     while(true){
@@ -212,17 +218,14 @@ $('composer').addEventListener('submit',e=>{e.preventDefault();send($('message-i
 $('message-input').addEventListener('input',()=>{$('send-button').disabled=state.busy || !$('message-input').value.trim();$('message-input').style.height='auto';$('message-input').style.height=Math.min($('message-input').scrollHeight,160)+'px';});
 $('message-input').addEventListener('keydown',e=>{if(e.key==='Enter' && !e.shiftKey && !e.isComposing){e.preventDefault();$('composer').requestSubmit();}});
 document.querySelectorAll('[data-prompt]').forEach(button=>button.onclick=()=>{if(state.busy)return;$('message-input').value=button.dataset.prompt;$('message-input').dispatchEvent(new Event('input'));$('message-input').focus();});
-$('new-chat').onclick=async()=>{try{const changed=$('user-id').value.trim()!==state.user || $('family-id').value.trim()!==state.family;if(!await applyIdentity())return;if(!changed)await newSession();}catch(e){error(e.message);}};
+$('new-chat').onclick=async()=>{try{const changed=$('user-id').value.trim()!==state.user || $('family-id').value!==state.family || $('device-id').value!==state.device;if(!await applyIdentity())return;if(!changed)await newSession();}catch(e){error(e.message);}};
 $('apply-identity').onclick=()=>applyIdentity().catch(e=>error(e.message));
-$('user-id').onchange=async()=>{
-  const selected=$('user-id').value;
-  if(selected==='__new_user__'){$('user-id').value=state.user;$('identity-input').value='';$('identity-family').value=state.family;$('identity-dialog').showModal();$('identity-input').focus();return;}
-  const item=state.users.find(item=>item.user_id===selected);
-  if(item && !item.family_ids.includes($('family-id').value))$('family-id').value=item.family_ids[0] || '';
-  if(selected==='knowin_public'){$('family-id').value='';$('remember-scope').value='personal';$('library-toggle').checked=true;}
-  try{await applyIdentity();}catch(e){showIdentity();error(e.message);}
+$('user-id').onchange=()=>applyIdentity().catch(e=>error(e.message));
+$('family-id').onchange=()=>{
+  const family=$('family-id').value;
+  $('device-id').replaceChildren(new Option('未标记设备',''),...state.me.devices.filter(d=>d.family_id===family).map(d=>new Option(d.name,d.device_id)));
+  $('remember-scope').querySelector('[value="family"]').disabled=!family;if(!family)$('remember-scope').value='personal';
 };
-$('family-id').oninput=()=>{const hasFamily=Boolean($('family-id').value.trim());$('remember-scope').querySelector('[value="family"]').disabled=!hasFamily;if(!hasFamily)$('remember-scope').value='personal';};
 $('stop-button').onclick=async()=>{if(state.session){try{await api('/sessions/'+state.session.id+'/cancel',{method:'POST'});$('reply-status').lastElementChild.textContent='正在停止…';}catch(e){error(e.message);}}};
 $('library-toggle').onchange=async()=>{if(!state.session)return;try{state.session=await api('/sessions/'+state.session.id,{method:'PATCH',body:JSON.stringify({...identityPayload(),use_library:$('library-toggle').checked})});}catch(e){$('library-toggle').checked=Boolean(state.session.use_library);error(e.message);}};
 $('delete-chat').onclick=async()=>{if(!state.session || state.busy)return;if(!confirm('删除这段对话？对应日记条目会一起移除，长期记忆会保留。'))return;try{await api('/sessions/'+state.session.id,{method:'DELETE'});$('diary-dialog').close();state.session=null;localStorage.removeItem(sessionKey());$('messages').replaceChildren();$('welcome').hidden=false;$('conversation-title').textContent='新的对话';$('delete-chat').hidden=true;await newSession();}catch(e){error(e.message);}};
@@ -232,22 +235,21 @@ $('diary-refresh').onclick=()=>loadDiary($('diary-date').value||'today');
 $('diary-date').onchange=()=>$('diary-refresh').click();
 $('diary-summarize').onclick=async()=>{if(!state.session)return;const ticket=++state.diaryEpoch;const button=$('diary-summarize');button.disabled=true;$('diary-content').innerHTML='<p>正在整理当天对话…</p>';try{const data=await api('/sessions/'+state.session.id+'/diary/summarize?'+new URLSearchParams({date:$('diary-date').value||'today'}),{method:'POST'});if(ticket===state.diaryEpoch)renderDiary(data);}catch(e){if(ticket===state.diaryEpoch)$('diary-content').innerHTML='<p class="diary-error">'+escape(e.message)+'</p>';}finally{button.disabled=false;}};
 setInterval(()=>{if($('diary-dialog').open&&state.diaryStatus==='pending'&&!$('diary-summarize').disabled)loadDiary($('diary-date').value||'today');},5000);
-$('identity-button').onclick=()=>{$('identity-input').value=state.user;$('identity-family').value=state.family;$('identity-dialog').showModal();};
-$('close-identity').onclick=()=>$('identity-dialog').close();
-$('identity-input').setAttribute('list','known-users');
-$('identity-form').onsubmit=async e=>{e.preventDefault();if(state.busy)return;const user=$('identity-input').value.trim();ensureUserOption(user);$('user-id').value=user;$('family-id').value=user==='knowin_public'?'':$('identity-family').value;if(user==='knowin_public')$('library-toggle').checked=true;$('identity-dialog').close();try{await applyIdentity();}catch(e){error(e.message);}};
+$('identity-button').onclick=()=>{if(!state.busy)location.href='/?users=1';};
 $('menu-button').onclick=()=>{document.body.classList.add('show-sidebar');$('shade').hidden=false;};
 $('memory-toggle').onclick=()=>{if(innerWidth<=1050){document.body.classList.toggle('show-memory');$('shade').hidden=!document.body.classList.contains('show-memory');}else document.body.classList.toggle('is-hidden-panel');};
 $('close-memory').onclick=closePanels;$('shade').onclick=closePanels;
 document.addEventListener('keydown',e=>{if(e.key==='Escape')closePanels();});
 async function init(){
-  if(!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(state.user))state.user='chat_default';
-  if(state.family && !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(state.family))state.family='';
-  showIdentity();
-  const [config]=await Promise.all([api('/config'),users()]);$('model-name').textContent=config.model;
-  const last=localStorage.getItem(sessionKey()) || (!state.family && localStorage.getItem('knowin-chat-session-'+state.user));
-  if(last){try{await loadSession(last);return;}catch{localStorage.removeItem(sessionKey());localStorage.removeItem('knowin-chat-session-'+state.user);}}
-  // Create a durable empty conversation so existing personal memories are visible immediately.
+  try{state.me=await identityApi('me');}catch{location.href='/?users=1';return;}
+  state.user=state.me.user_id;
+  if(!state.me.families.some(f=>f.family_id===state.family))state.family='';
+  if(!state.me.devices.some(d=>d.device_id===state.device&&d.family_id===state.family))state.device='';
+  const requested=new URLSearchParams(location.search).get('session');
+  if(requested){const session=await api('/sessions/'+encodeURIComponent(requested));state.family=session.family_id||'';state.device=session.device_id||'';}
+  showIdentity();const [config]=await Promise.all([api('/config'),users()]);$('model-name').textContent=config.model;
+  const last=requested||localStorage.getItem(sessionKey());
+  if(last){try{await loadSession(last);return;}catch(e){localStorage.removeItem(sessionKey());if(requested)throw e;}}
   await newSession();
 }
 init().catch(e=>{error(e.message);$('model-name').textContent='连接未完成';});

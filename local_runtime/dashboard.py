@@ -28,6 +28,7 @@ from .material_errors import MaterialError
 from .materials import DEFAULT_ROOT, chunk_records, digest, error_summary, existing_chunks, file_hash, write_json
 from .runtime import PROJECT_ROOT, close_memory, create_memory, load_settings
 from .rerank import Reranker
+from .access import Access, COOKIE, CURRENT_USER, viewer, library_key
 from .videos import VIDEO_EXTENSIONS
 from .web_parsing import WEB_EXTENSIONS, WebParser
 
@@ -68,6 +69,7 @@ class Dashboard:
         self.directory = settings.data_dir / "dashboard"
         self.directory.mkdir(parents=True, exist_ok=True)
         self.jobs_db = self.directory / "jobs.sqlite"
+        self.access = Access(self.directory / "chat.sqlite")
         self.limit = max_upload_mb * 1024 * 1024
         self.memory = None
         self.reranker = Reranker(getattr(settings, "rerank", None))
@@ -100,6 +102,7 @@ class Dashboard:
             self.reranker.close()
             self.reranker = self.memory.runtime_reranker
         self.refresh()
+        self.access.bootstrap(self.snapshot())
         for job in list(self.jobs.values()):
             if job["status"] in ACTIVE:
                 self.save_job(job["id"], status="queued", message="服务重启，等待恢复导入", error=None)
@@ -153,13 +156,16 @@ class Dashboard:
         with self.state_lock:
             return list(self.items)
 
+    def visible_snapshot(self):
+        return self.access.visible(self.snapshot(), viewer())
+
     def job_list(self):
         with self.state_lock:
             return sorted((dict(j) for j in self.jobs.values()), key=lambda j: j["created_at"], reverse=True)
 
-    def source_list(self):
+    def source_list(self, items=None):
         sources = {}
-        for item in self.snapshot():
+        for item in self.snapshot() if items is None else items:
             meta = item["metadata"]
             if not meta.get("source_file"):
                 continue
@@ -183,6 +189,8 @@ class Dashboard:
             report = json.loads(path.read_text())
             if report.get("collection") != self.settings.collection:
                 continue
+            if items is not None:
+                continue  # historical reports have no trustworthy owner binding
             for filename, data in report.get("files", {}).items():
                 if data.get("status") != "failed":
                     continue
@@ -201,7 +209,7 @@ class Dashboard:
                 )
         return sorted(sources.values(), key=lambda x: (x["status"] != "failed", x["source_file"]))
 
-    def accept(self, path, name, sha, size, user_id):
+    def accept(self, path, name, sha, size, user_id, ownership=None):
         with self.state_lock:
             active = next(
                 (
@@ -239,6 +247,7 @@ class Dashboard:
                 path.replace(destination)
             job_id = str(uuid.uuid4())
             job = {
+                **(ownership or {}),
                 "id": job_id,
                 "filename": name,
                 "path": str(destination),
@@ -290,6 +299,7 @@ class Dashboard:
         added, skipped, ids = 0, 0, []
         self.save_job(job_id, status="writing", message="写入记忆", chunks=len(records), processed=0)
         for index, (text, meta) in enumerate(records, 1):
+            meta.update({k: job[k] for k in ("owner_user_id", "family_id", "device_id", "visibility", "memory_type") if k in job})
             if self.stopping.is_set():
                 self.save_job(job_id, status="queued", message="服务停止，下次启动继续")
                 return
@@ -369,6 +379,8 @@ def create_app(settings=None, root=DEFAULT_ROOT, memory_factory=create_memory, m
     from .chat import install as install_chat
 
     install_chat(app, service)
+    from .management import install as install_management
+    install_management(app, service)
 
     @app.middleware("http")
     async def boundaries(request, call_next):
@@ -382,10 +394,26 @@ def create_app(settings=None, root=DEFAULT_ROOT, memory_factory=create_memory, m
                 return JSONResponse({"detail": "不允许跨站请求"}, status_code=403)
             if request.headers.get("x-memory-client") != "dashboard":
                 return JSONResponse({"detail": "缺少页面请求标识"}, status_code=403)
+        token = CURRENT_USER.set(None)
         try:
+            public = request.url.path in {"/api/identity/users", "/api/identity/select"}
+            if request.url.path.startswith("/api/") and not public:
+                user = service.access.authenticate(request.cookies.get(COOKIE, ""))
+                if not user:
+                    raise HTTPException(401, "请先选择用户")
+                CURRENT_USER.set(user)
+                if request.headers.get("x-memory-user", user) != user:
+                    raise HTTPException(409, "用户已在其他页面切换，请刷新当前页面")
+                match = re.match(r"^/api/chat/sessions/([^/]+)", request.url.path)
+                if match and app.state.chat.session(match[1])["user_id"] != user:
+                    raise HTTPException(404, "对话不存在")
             response = await call_next(request)
+        except HTTPException as exc:
+            response = JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
         except Exception as exc:
             response = JSONResponse({"detail": error_summary(exc)}, status_code=500)
+        finally:
+            CURRENT_USER.reset(token)
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "same-origin"
         response.headers["Cache-Control"] = "no-store"
@@ -398,14 +426,14 @@ def create_app(settings=None, root=DEFAULT_ROOT, memory_factory=create_memory, m
 
     @app.get("/api/overview")
     def overview():
-        items, sources = service.snapshot(), service.source_list()
+        items, sources = service.visible_snapshot(), service.source_list(service.visible_snapshot())
         return {
             "total": len(items),
             "categories": dict(Counter(i["category"] for i in items)),
             "users": dict(Counter(i["user_id"] for i in items)),
             "source_count": sum(s["status"] == "complete" for s in sources),
             "failed_sources": sum(s["status"] == "failed" for s in sources),
-            "jobs_active": sum(j["status"] in ACTIVE for j in service.job_list()),
+            "jobs_active": sum(j["status"] in ACTIVE for j in [j for j in service.job_list() if j.get("owner_user_id") == viewer()]),
             "collection": service.settings.collection,
             "embedding": service.settings.embedding.model,
             "dimensions": service.settings.embedding_dims,
@@ -426,7 +454,7 @@ def create_app(settings=None, root=DEFAULT_ROOT, memory_factory=create_memory, m
         page: int = Query(1, ge=1),
         page_size: int = Query(12, ge=1, le=100),
     ):
-        items = service.snapshot()
+        items = service.visible_snapshot()
         if user_id:
             items = [i for i in items if i["user_id"] == user_id]
         if kind:
@@ -451,7 +479,7 @@ def create_app(settings=None, root=DEFAULT_ROOT, memory_factory=create_memory, m
 
         candidates = [
             i
-            for i in service.snapshot()
+            for i in service.visible_snapshot()
             if (not user_id or i["user_id"] == user_id)
             and (not kind or i["category"] == kind)
             and (not source or i["metadata"].get("source_file") == source)
@@ -478,7 +506,7 @@ def create_app(settings=None, root=DEFAULT_ROOT, memory_factory=create_memory, m
 
     @app.get("/api/memories/{memory_id}")
     def detail(memory_id: str):
-        item = next((i for i in service.snapshot() if i["id"] == memory_id), None)
+        item = next((i for i in service.visible_snapshot() if i["id"] == memory_id), None)
         if item is None:
             raise HTTPException(404, "记忆不存在")
         with service.memory_lock:
@@ -492,6 +520,8 @@ def create_app(settings=None, root=DEFAULT_ROOT, memory_factory=create_memory, m
         index: int = Query(0, ge=0, le=100),
         download: bool = False,
     ):
+        if not any(i["id"] == memory_id for i in service.visible_snapshot()):
+            raise HTTPException(404, "记录不存在")
         path = service.resolve_file(memory_id, asset, index)
         media = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
         inline = media.startswith(("image/", "video/", "audio/")) or media == "application/pdf"
@@ -504,17 +534,24 @@ def create_app(settings=None, root=DEFAULT_ROOT, memory_factory=create_memory, m
 
     @app.get("/api/sources")
     def sources():
-        return {"items": service.source_list()}
+        return {"items": service.source_list(service.visible_snapshot())}
 
     @app.get("/api/jobs")
     def jobs():
-        return {"items": service.job_list()}
+        return {"items": [j for j in service.job_list() if j.get("owner_user_id") == viewer()]}
 
     @app.post("/api/uploads", status_code=202)
-    async def upload(request: Request, filename: str, user_id: str = "knowin_public"):
+    async def upload(request: Request, filename: str, user_id: str = "", family_id: str = "", device_id: str = "", scope: str = "personal"):
         name = safe_filename(filename)
-        if not re.fullmatch(r"[\w.\-]{1,100}", user_id):
-            raise HTTPException(400, "用户标识仅支持字母、数字、中文、点、下划线和短横线，最多 100 字符")
+        user = viewer()
+        if user_id and user_id != user:
+            raise HTTPException(403, "不能上传到其他用户")
+        service.access.require_context(user, family_id, device_id)
+        if scope not in {"personal", "family"} or (scope == "family" and not family_id):
+            raise HTTPException(422, "保存范围无效；家庭共享需要家庭 ID")
+        target = library_key(user, family_id, device_id, scope == "family")
+        ownership = {"owner_user_id": user, "family_id": family_id, "device_id": device_id,
+                     "visibility": scope, "memory_type": "builtin"}
         length = request.headers.get("content-length")
         if length and int(length) > service.limit:
             raise HTTPException(413, "文件超过上传大小限制")
@@ -534,7 +571,7 @@ def create_app(settings=None, root=DEFAULT_ROOT, memory_factory=create_memory, m
             if not size:
                 raise HTTPException(400, "不能上传空文件")
             async with service.upload_gate:
-                return await asyncio.to_thread(service.accept, temp, name, sha.hexdigest(), size, user_id)
+                return await asyncio.to_thread(service.accept, temp, name, sha.hexdigest(), size, target, ownership)
         finally:
             temp.unlink(missing_ok=True)
 
@@ -542,7 +579,7 @@ def create_app(settings=None, root=DEFAULT_ROOT, memory_factory=create_memory, m
     def retry(job_id: str):
         with service.state_lock:
             job = service.jobs.get(job_id)
-            if job is None:
+            if job is None or job.get("owner_user_id") != viewer():
                 raise HTTPException(404, "任务不存在")
             if job["status"] != "failed":
                 raise HTTPException(409, "只有失败的任务可以重试")
@@ -552,7 +589,7 @@ def create_app(settings=None, root=DEFAULT_ROOT, memory_factory=create_memory, m
 
     @app.get("/")
     def index():
-        return FileResponse(STATIC / "index.html")
+        return FileResponse(STATIC / "manage.html")
 
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
     return app

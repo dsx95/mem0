@@ -155,11 +155,11 @@ def test_conflict_requires_two_real_sources_and_keeps_uncertainty():
 def test_company_turn_ignores_old_assistant_claims_and_never_streams_unverified_draft(console):
     client, chat, service = console
     identity = seed(service)
-    sid = session(client, user_id="knowin_public")
+    sid = session(client, user_id="alice")
     chat.client_factory = lambda: Model([[chunk("愿景是让每个家庭，拥有可生长的记忆。"), chunk(finish="stop")]])
     message(client, sid, "你好")
     model = Model([
-        [chunk("不可信的提前回答")] + function({"action": "search", "text": "诺因 愿景", "scope": "library"}, finish="stop"),
+        [chunk("不可信的提前回答")] + function({"action": "search", "text": "诺因 愿景", "scope": "all"}, finish="stop"),
         batch(extract(identity, "愿景：让家，记得你。")),
         batch(extract(identity)),
     ])

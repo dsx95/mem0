@@ -11,8 +11,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from local_runtime.chat import Chat, SessionInput
+from local_runtime.access import Access
 from local_runtime.dashboard import create_app
-from local_runtime.test_dashboard import TestMemory
+from local_runtime.test_dashboard import TestMemory, login
 
 HEADERS = {"X-Memory-Client": "dashboard"}
 
@@ -74,16 +75,29 @@ def console(tmp_path):
         embedding=NS(model="test"), embedding_dims=3)
     app = create_app(settings=settings, root=tmp_path / "materials", memory_factory=Memory)
     with TestClient(app) as client:
+        login(client, "chat_default")
         yield client, app.state.chat, app.state.service
 
 
 def session(client, **kwargs):
-    response = client.post("/api/chat/sessions", json={"user_id": "chat_alice", **kwargs}, headers=HEADERS)
+    user, family = kwargs.get("user_id", "chat_alice"), kwargs.get("family_id", "")
+    login(client, user)
+    # Explicit fixture provisioning; authorization denial cases use raw requests.
+    access = client.app.state.service.access
+    if family:
+        with access.db() as db:
+            row = db.execute("SELECT owner_user_id FROM app_families WHERE family_id=?", (family,)).fetchone()
+        if not row:
+            access.create_family(user, family, family)
+        else:
+            access.add_member(row[0], family, user)
+    response = client.post("/api/chat/sessions", json={"user_id": user, **kwargs}, headers=HEADERS)
     assert response.status_code == 201
     return response.json()["id"]
 
 
 def message(client, sid, text="记住我喜欢茶", request_id=None, **context):
+    login(client, client.app.state.chat.session(sid)["user_id"])
     response = client.post(f"/api/chat/sessions/{sid}/messages", headers=HEADERS,
         json={"text": text, "request_id": request_id or str(uuid.uuid4()), **context})
     assert response.status_code == 200, response.text
@@ -222,8 +236,10 @@ def test_family_shared_and_member_private_scopes(console):
     assert {r["text"] for r in search(alice)} == {"Alice 私人偏好", "周六家庭聚餐"}
     assert [r["text"] for r in search(bob)] == ["周六家庭聚餐"]
     assert search(elsewhere) == []
+    login(client, "bob")
     rows = client.get(f"/api/chat/sessions/{bob['id']}/memories").json()["items"]
     assert len(rows) == 1 and rows[0]["scope"] == "family"
+    login(client, "alice")
     listed = client.get("/api/chat/sessions?user_id=alice&family_id=home1").json()["items"]
     assert [r["id"] for r in listed] == [alice["id"]]
 
@@ -285,7 +301,7 @@ def test_message_identity_is_validated_persisted_and_passed_to_model(console):
         assert client.post(endpoint, headers=HEADERS, json={"text": "你好", "request_id": str(uuid.uuid4()), **context}).status_code == 409
     model = Model([[chunk("你好"), chunk(finish="stop")]])
     chat.client_factory = lambda: model
-    context = {"user_id": "user001", "family_id": "family001", "remember_scope": "family"}
+    context = {"user_id": "user001", "family_id": "family001", "remember_scope": "family", "device_id": ""}
     message(client, sid, "你好", **context)
     assert json.dumps(context, ensure_ascii=False) in model.calls[0]["messages"][0]["content"]
     assert chat.detail(sid)["turns"][0]["input_context"] == context
@@ -318,12 +334,14 @@ def test_legacy_database_keeps_history_and_original_memory_binding(tmp_path):
     """)
     db.commit()
     db.close()
-    chat = Chat(NS(directory=tmp_path, snapshot=list))
+    access = Access(path)
+    chat = Chat(NS(directory=tmp_path, snapshot=list, access=access))
+    access.bootstrap([])
     assert chat.detail("old")["turns"][0]["answer"] == "回答"
     assert chat.detail("old")["turns"][0]["input_context"] == {}
     new = chat.create(SessionInput())
     assert new["memory_user_id"] == "chat_default" and new["family_id"] == ""
-    reopened = Chat(NS(directory=tmp_path, snapshot=list))
+    reopened = Chat(NS(directory=tmp_path, snapshot=list, access=access))
     assert reopened.create(SessionInput())["memory_user_id"] == "chat_default"
 
 
@@ -362,6 +380,9 @@ def test_product_search_expands_spoken_terms_and_prioritizes_specification(conso
             {"id": "spec", "memory": "产品参数：双臂最大负载 6 kg", "score": .6,
              "metadata": {"source_file": "参数.docx", "page_label": "7"}}]}
     service.memory.search = search
+    service.items.extend([
+        {"id": "news", "memory": "双臂具备强大能力", "user_id": "knowin_public", "metadata": {}, "created_at": None, "updated_at": None},
+        {"id": "spec", "memory": "产品参数：双臂最大负载 6 kg", "user_id": "knowin_public", "metadata": {"source_file": "参数.docx", "page_label": "7"}, "created_at": None, "updated_at": None}])
     result = chat.execute(chat.session(session(client)), {"action": "search", "text": "Knowin-X1 双臂承重能力", "scope": "library"})
     assert "最大负载" in seen[0][0] and seen[0][2] == 20
     assert seen[0][1] == {"user_id": "knowin_public"}
@@ -376,9 +397,10 @@ def test_users_include_all_imported_users_and_chat_users_without_internal_keys(c
     chat.execute({**chat.session(sid), "remember_scope": "family"}, {"action": "remember", "text": "家庭约定"})
     rows = client.get("/api/chat/users").json()["items"]
     by_id = {row["user_id"]: row for row in rows}
-    assert set(by_id) == {"alice", "bob", "new_member"}
-    assert by_id["alice"]["memory_count"] == 12
-    assert by_id["bob"]["memory_count"] == 13
+    assert set(by_id) == {"new_member"}
+    chooser = client.get("/api/identity/users").json()["items"]
+    assert {"alice", "bob", "new_member"} <= {row["user_id"] for row in chooser}
+    assert all("memory_count" not in row for row in chooser)
     assert by_id["new_member"]["memory_count"] == 2
     assert by_id["new_member"]["family_ids"] == ["home1"]
     assert client.delete(f"/api/chat/sessions/{sid}", headers=HEADERS).status_code == 200
@@ -394,17 +416,13 @@ def test_selecting_imported_user_reads_existing_memory_and_preserves_family_isol
     assert client.get(f"/api/chat/sessions/{family}/memories").json()["total"] == 0
 
 
-def test_public_user_is_selectable_and_read_only(console):
+def test_public_material_is_readable_without_becoming_a_shared_identity(console):
     client, chat, service = console
-    service.memory.add("公开产品参数", user_id="knowin_public", infer=False, metadata={})
+    result = service.memory.add("公开产品参数", user_id="knowin_public", infer=False, metadata={})
+    mid = result["results"][0]["id"]
     service.refresh()
-    sid = session(client, user_id="knowin_public", use_library=False)
-    current = chat.session(sid)
-    assert current["use_library"] and current["memory_user_id"] == "knowin_public"
-    assert "error" in chat.execute(current, {"action": "remember", "text": "禁止写入资料库"})
-    assert service.memory.add_calls == 1
-    result = chat.execute(current, {"action": "search", "text": "产品参数", "scope": "all"})
+    sid = session(client, user_id="alice")
+    result = chat.execute(chat.session(sid), {"action": "search", "text": "产品参数", "scope": "library"})
     assert result["count"] == 1 and result["memories"][0]["scope"] == "library"
-    assert client.get(f"/api/chat/sessions/{sid}/memories").json()["items"][0]["scope"] == "library"
-    public = next(row for row in client.get("/api/chat/users").json()["items"] if row["user_id"] == "knowin_public")
-    assert public["read_only"]
+    assert client.post("/api/identity/select", json={"user_id": "knowin_public"}, headers=HEADERS).status_code == 404
+    assert client.delete(f"/api/memories/{mid}", headers=HEADERS).status_code == 403

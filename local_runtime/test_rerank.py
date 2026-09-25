@@ -180,6 +180,8 @@ def test_chat_reranks_enlarged_authorized_pool_and_does_not_resort_by_old_score(
 
 def test_dashboard_search_filters_before_rerank_and_keeps_provider_order(console):
     client, _, service = console
+    from local_runtime.test_dashboard import login
+    login(client, "alice")
     def respond(request):
         data = json.loads(request.content)
         assert len(data["documents"]) > 2

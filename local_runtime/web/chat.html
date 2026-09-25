@@ -25,7 +25,7 @@
   <a href="/chat" class="brand"><span class="brand-mark">k<span>·</span></span><span>KNOWIN<small>你的记忆对话空间</small></span></a>
   <button id="new-chat" class="new-chat"><svg><use href="#plus"/></svg>开启新对话<span>↗</span></button>
   <button id="diary-button" class="new-chat diary-open"><svg><use href="#book"/></svg>查看每日记事<span>↗</span></button>
-  <nav class="main-nav"><a class="selected" href="/chat"><svg><use href="#chat"/></svg>记忆对话<span class="nav-dot"></span></a><a href="/"><svg><use href="#stack"/></svg>记忆资料库<small>↗</small></a></nav>
+  <nav class="main-nav"><a class="selected" href="/chat"><svg><use href="#chat"/></svg>记忆对话<span class="nav-dot"></span></a><a href="/"><svg><use href="#stack"/></svg>我的记忆管理<small>↗</small></a></nav>
   <div class="history-heading">最近的对话<span id="session-count">0</span></div>
   <div id="session-list" class="session-list" aria-label="对话历史"><p class="sidebar-empty">每次对话，都从这里继续。</p></div>
   <div class="sidebar-note"><span class="little-star">✳</span><p>好对话，不必从头开始。<small>新对话也能找回你的长期记忆。</small></p></div>
@@ -51,20 +51,20 @@
   <div class="composer-area"><div id="reply-status" class="reply-status" role="status" hidden><span class="pulse-dot"></span><span>正在思考…</span></div>
     <form id="composer" class="composer"><div class="identity-fields">
       <label>用户 <code>user_id</code><select id="user-id" required aria-label="选择数据库用户"><option value="chat_default">chat_default</option></select></label>
-      <label>家庭 <code>family_id</code><input id="family-id" placeholder="选填，例如 family_001" pattern="[A-Za-z0-9][A-Za-z0-9_.\-]{0,63}" maxlength="64" autocomplete="off"></label>
+      <label>家庭<select id="family-id" aria-label="选择家庭"><option value="">个人空间 / 无家庭</option></select></label>
+      <label>设备<select id="device-id" aria-label="选择设备"><option value="">未标记设备</option></select></label>
       <label class="scope-field">本条消息保存到<select id="remember-scope" aria-label="记忆保存范围"><option value="personal">个人记忆</option><option value="family">家庭共享</option></select></label>
       <button type="button" id="apply-identity" class="apply-identity">切换身份</button>
     </div><p id="identity-context" class="identity-context">身份会随每条消息发送，切换身份会开启独立对话。</p><label class="visually-hidden" for="message-input">发送消息</label><textarea id="message-input" placeholder="说说你的想法，或让我记住一件事…" rows="2" maxlength="12000"></textarea><div class="composer-bottom"><span class="memory-enabled"><svg><use href="#spark"/></svg>长期记忆已连接</span><span class="composer-key">Enter 发送 · Shift + Enter 换行</span><button type="button" id="stop-button" class="stop-button" hidden>停止回复</button><button id="send-button" class="send-button" type="submit" aria-label="发送消息" disabled><svg><use href="#arrow"/></svg></button></div></form>
-    <p class="composer-footnote">个人记忆按用户和家庭分别保存；家庭共享仅写入当前家庭。这是本机测试身份，不是账号认证。</p>
+    <p class="composer-footnote">个人记忆按用户和家庭分别保存；家庭共享仅写入当前家庭。当前为无密码用户模式。家庭和设备须先在记忆管理页创建。</p>
   </div>
 </main>
 <aside id="memory-panel" class="memory-panel"><div class="panel-heading"><div><span class="eyebrow">REMEMBER, TOGETHER</span><h2>个人与家庭记忆 <span id="memory-count">0</span></h2></div><button class="icon panel-close" id="close-memory" aria-label="关闭记忆面板"><svg><use href="#close"/></svg></button></div>
   <div class="memory-intro"><span class="tiny-star">✳</span><p>在每一次交流中，<br>慢慢积累对你的了解。</p></div>
   <div id="personal-memories" class="personal-memories"><div class="memory-empty"><div class="memory-orbit"><span>✧</span></div><strong>故事，从这里开始</strong><p>告诉我一件你希望记住的事，<br>它就会出现在这里。</p></div></div>
-  <section class="library-card"><div class="library-top"><span class="library-icon"><svg><use href="#book"/></svg></span><div><strong>参考诺因资料库</strong><small>从现有资料中查找答案</small></div><label class="switch"><input id="library-toggle" type="checkbox" checked aria-label="参考诺因资料库"><span></span></label></div><p>资料只用于参考，你的个人记忆单独保存。</p><a href="/">打开记忆资料库 <span>↗</span></a></section>
+  <section class="library-card"><div class="library-top"><span class="library-icon"><svg><use href="#book"/></svg></span><div><strong>参考内置资料</strong><small>从现有资料中查找答案</small></div><label class="switch"><input id="library-toggle" type="checkbox" checked aria-label="参考内置资料"><span></span></label></div><p>资料只用于参考，你的个人记忆单独保存。</p><a href="/">打开我的记忆管理 <span>↗</span></a></section>
   <div class="panel-footer"><span class="status-dot"></span>记忆由 Mem0 持久保存</div>
 </aside>
-<dialog id="identity-dialog"><form id="identity-form"><div class="dialog-heading"><h2>对话身份</h2><button type="button" class="icon" id="close-identity" aria-label="关闭"><svg><use href="#close"/></svg></button></div><p>个人记忆按 user_id 和 family_id 组合保存，同一家庭可读取家庭共享记忆。</p><label>用户 user_id<input id="identity-input" value="chat_default" pattern="[A-Za-z0-9][A-Za-z0-9_.\-]{0,63}" maxlength="64" required autocomplete="off"></label><label>家庭 family_id（选填）<input id="identity-family" pattern="[A-Za-z0-9][A-Za-z0-9_.\-]{0,63}" maxlength="64" autocomplete="off"></label><small>这是本机测试身份，不是账号认证；标识使用字母、数字、点、下划线或短横线。</small><button type="submit" class="dialog-submit">切换到这个身份</button></form></dialog>
 <dialog id="diary-dialog" class="diary-dialog"><div class="dialog-heading"><h2>每日记事</h2><button type="button" class="icon" id="close-diary" aria-label="关闭"><svg><use href="#close"/></svg></button></div><p class="diary-note">按北京时间归档当前用户的对话；完整记录保留在下方，机器整理可能有遗漏。</p><div class="diary-controls"><label>日期 <input id="diary-date" type="date"></label><button type="button" id="diary-refresh">查看</button><button type="button" id="diary-summarize">重新整理</button><a id="diary-download" href="#" download>下载 Markdown</a></div><div id="diary-content" class="diary-content" aria-live="polite"></div></dialog>
-<datalist id="known-users"></datalist>
+
 </body></html>

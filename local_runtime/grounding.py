@@ -93,11 +93,11 @@ def tokens(text):
     return result
 
 
-def hybrid_library(query, vector_rows, snapshot, limit=12):
-    """Merge Mem0 similarity hits and BM25 keyword hits in the same public scope."""
+def hybrid_library(query, vector_rows, snapshot, limit=12, user_keys=None):
+    """Merge similarity and keyword hits inside the supplied authorized library scope."""
     records = {}
     for item in snapshot:
-        if item.get("user_id") != "knowin_public":
+        if item.get("user_id") not in (user_keys or {"knowin_public"}):
             continue
         metadata = item.get("metadata") or {}
         records[str(item["id"])] = {"id": str(item["id"]), "text": item["memory"][:6000], "scope": "library",

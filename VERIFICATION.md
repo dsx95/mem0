@@ -1,4 +1,16 @@
-# 验证记录 — 2026-09-23
+# 验证记录
+
+## 用户、设备与记忆管理 — 2026-09-25
+
+- 本地项目 `.venv` 下 157 项测试通过，覆盖 runtime、dashboard、materials、videos、chat、grounding、diary、rerank、management 和 portable；6 个第三方弃用提示，无测试失败。
+- 新增 14 项管理/权限用例：Cookie 身份、家庭成员和多设备隔离、私有附件与任务隔离、隐藏记录检索过滤、共享记录删除权限、Qdrant/SQLite 历史联动删除、日记删除重启不回填、旧用户存储身份兼容、摘要并发版本保护。
+- Python Ruff、manage.js/chat.js 语法检查、Git 空白检查通过。
+- 使用临时数据和假模型，在本机 18935 端口检查实际网页：切换 Alice/Bob、家庭与设备筛选、共享/私人标识、对话详情、继续对话、消息 device_id、按设备读取当天日记。
+- 浏览器未对实际用户数据执行删除；删除由临时数据库测试验证。未调用云端付费模型，未修改 Coder/火山服务或真实数据目录。
+- 本机 18580 端口当前是已有 SSH 转发，本次测试未占用或重启它。代码更改在本地 checkout；运行本地新版可另用 `bash start.sh --port 18581`。
+- 当前无密码切换按需求保留；对象权限检查不等于真实登录认证。正式部署仍需补登录、成员退出、设备解绑和完整资料/备份清理策略。
+
+## 独立 uv 安装 — 2026-09-23
 
 - 在本机 macOS arm64 全新创建项目 `.venv`（Python 3.11.15），通过 start.sh 安装 91 个锁定依赖。
 - uv pip check 通过；doctor 成功导入 PyAV、PyMuPDF、fastembed、Qdrant、spaCy，并检测到 en_core_web_sm。

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -87,7 +88,7 @@ class DailyDiary:
                 ON CONFLICT(user_id,family_id,diary_date) DO UPDATE SET
                   source_version=source_version+1, summary='', new_preferences='[]',
                   summary_status='pending', updated_at=excluded.updated_at
-            """, (session["user_id"], session["family_id"], day, 1, datetime.now(timezone.utc).isoformat()))
+            """, (session["user_id"], session["family_id"], day, time.time_ns(), datetime.now(timezone.utc).isoformat()))
         return day if inserted else None
 
     def backfill(self, db):
@@ -146,9 +147,10 @@ class DailyDiary:
             SELECT * FROM daily_diaries WHERE user_id=? AND family_id=? AND diary_date=?
         """, (session["user_id"], session["family_id"], date)).fetchone()
         entries = [dict(item) for item in db.execute("""
-            SELECT turn_id,session_id,created_at,status,user_text,answer,error,new_memories
-            FROM daily_diary_entries WHERE user_id=? AND family_id=? AND diary_date=?
-            ORDER BY created_at,turn_id
+            SELECT e.turn_id,e.session_id,e.created_at,e.status,e.user_text,e.answer,e.error,e.new_memories,s.device_id
+            FROM daily_diary_entries e JOIN chat_sessions s ON s.id=e.session_id
+            WHERE e.user_id=? AND e.family_id=? AND e.diary_date=?
+            ORDER BY e.created_at,e.turn_id
         """, (session["user_id"], session["family_id"], date))]
         for entry in entries:
             entry["new_memories"] = json.loads(entry["new_memories"])

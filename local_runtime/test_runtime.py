@@ -22,6 +22,10 @@ def isolated_environment(monkeypatch, tmp_path):
     monkeypatch.setenv("MEM0_TELEMETRY", "false")
     monkeypatch.setenv("MEM0_DIR", str(tmp_path / "sdk"))
     monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+    # Other tests may already have imported the SDK; isolate import-time flags too.
+    from mem0.memory import main as memory_main
+    monkeypatch.setattr(memory_main, "MEM0_TELEMETRY", False)
+    monkeypatch.setattr(memory_main, "mem0_dir", str(tmp_path / "sdk"))
 
 
 @contextmanager
