@@ -355,6 +355,9 @@ class Chat:
                 return {"error": "此对话未启用资料库", "memories": []}
             visible = service.access.visible(service.snapshot(), session["user_id"])
             allowed = {i["id"] for i in visible}
+            library = [i for i in visible if i["memory_type"] == "builtin"
+                       and (i["scope"] == "public" or i["family_id"] == session["family_id"])
+                       and (not i["device_id"] or not session.get("device_id") or i["device_id"] == session["device_id"])]
             scopes = []
             if scope in {"personal", "all"}:
                 scopes.append((session["memory_user_id"], "library" if session["user_id"] == "knowin_public" else "personal"))
@@ -363,9 +366,6 @@ class Chat:
             if scope in {"family", "all"} and session["family_id"]:
                 scopes.append((memory_key("", session["family_id"], shared=True), "family"))
             if scope in {"library", "all"} and session["use_library"]:
-                library = [i for i in visible if i["memory_type"] == "builtin"
-                           and (i["scope"] == "public" or i["family_id"] == session["family_id"])
-                           and (not i["device_id"] or not session.get("device_id") or i["device_id"] == session["device_id"])]
                 scopes.extend((key, "library") for key in dict.fromkeys(i["user_id"] for i in library))
             # Spoken questions use 承重/拎, while specification tables use 最大负载.
             specification = "最大负载" if re.search(r"负载|承重|拎|重物|payload|carrying", text, re.IGNORECASE) else ""

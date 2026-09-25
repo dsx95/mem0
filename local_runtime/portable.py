@@ -29,6 +29,17 @@ def main():
     args = parser.parse_args()
     if not 1 <= args.port <= 65535:
         parser.error("port must be 1–65535")
+    from .migration import MigrationError, offline
+    try:
+        with offline(ROOT):
+            run(args, parser)
+    except MigrationError as exc:
+        parser.exit(1, str(exc) + "\n")
+
+
+def run(args, parser):
+    from .migration import apply_pending, recover_restore
+    recover_restore(ROOT)
     configure()
     if args.doctor:
         import importlib
@@ -54,7 +65,7 @@ def main():
         return
     profile = ROOT / "config" / (args.profile + ".env")
     if not profile.exists():
-        with profile.open("x", opener=lambda path, flags: os.open(path, flags, 0o600)) as stream:
+        with open(profile, "x", opener=lambda path, flags: os.open(path, flags, 0o600)) as stream:
             stream.write(profile.with_suffix(".env.example").read_text())
     from dotenv import dotenv_values
 
@@ -77,10 +88,15 @@ def main():
 
     settings = load_settings(profile)
     settings.validate()
+    restored = apply_pending(ROOT, settings)
+    if restored:
+        print("迁移恢复完成，恢复前备份：" + restored["backup"], flush=True)
+        settings = load_settings(profile)
     from .dashboard import create_app
     import uvicorn
 
     print(f"记忆服务：http://127.0.0.1:{args.port} | 数据目录：{settings.data_dir}", flush=True)
+    print("整库迁移管理码：在项目终端执行 bash migrate.sh token 获取。", flush=True)
     uvicorn.run(create_app(settings, root=ROOT / "materials"), host="127.0.0.1", port=args.port, access_log=False)
 
 

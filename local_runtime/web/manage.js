@@ -28,7 +28,10 @@ function renderProfile(){
 }
 async function chooseUser(){
   const result=await api('/api/identity/users');state.users=result.items;
-  $('user-list').innerHTML=result.items.map(u=>`<button data-user="${esc(u.user_id)}">${esc(u.name)}<small>${esc(u.user_id)}</small></button>`).join('');
+  options($('existing-user'),result.items.map(u=>[u.user_id,`${u.name} (${u.user_id})`]),result.items.length?[]:[['','暂无用户，请先创建']]);
+  if(state.me)$('existing-user').value=state.me.user_id;
+  $('user-count').textContent=`共 ${result.items.length} 个用户`;
+  $('select-user').disabled=!result.items.length;
   if(!$('users-dialog').open)$('users-dialog').showModal();
 }
 async function selectUser(id){
@@ -45,6 +48,7 @@ async function load(){
   const epoch=++state.epoch,tab=state.tab;const type=types[tab];
   $('breadcrumb').textContent=type[0];$('title').textContent=type[1];$('subtitle').textContent=type[2];$('type-hint').textContent=type[3];$('alert').hidden=true;
   $('add-record').hidden=!['builtin','longterm'].includes(tab);$('add-record').textContent=tab==='builtin'?'＋ 添加资料':'＋ 添加记忆';$('hidden-control').hidden=!['builtin','longterm'].includes(tab);$('imports').hidden=tab!=='builtin';$('query').disabled=tab==='diaries';
+  $('add-record').disabled=Boolean(state.me.read_only);
   document.querySelectorAll('[data-tab]').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));
   $('records').innerHTML='<div class="empty">正在读取你的记录…</div>';
   const params=new URLSearchParams({family_id:$('family-filter').value,device_id:$('device-filter').value,page:state.page,q:$('query').value.trim()});
@@ -98,6 +102,7 @@ function newRecord(){
   const family=$('family-filter').value;if(family&&family!=='__none__')$('record-family').value=family;recordDevices();const device=$('device-filter').value;if(device&&device!=='__none__')$('record-device').value=device;
   $('record-dialog').showModal();
 }
+$('select-user-form').onsubmit=async e=>{e.preventDefault();const button=$('select-user'),select=$('existing-user');button.disabled=true;select.disabled=true;try{await selectUser(select.value);}catch(e){failure(e);}finally{button.disabled=!state.users.length;select.disabled=false;}};
 $('new-user-form').onsubmit=async e=>{e.preventDefault();try{const body=Object.fromEntries(new FormData(e.target));await post('/api/identity/users',body);await selectUser(body.user_id);e.target.reset();}catch(e){failure(e);}};
 $('relationship-form').onsubmit=async e=>{e.preventDefault();try{const kind=state.relationship,id=$('relationship-id').value.trim(),name=$('relationship-name').value.trim(),family=$('relationship-family').value;const body=kind==='family'?{family_id:id,name}:kind==='device'?{device_id:id,name,family_id:family}:{user_id:$('relationship-user').value};await post(kind==='member'?'/api/identity/families/'+encodeURIComponent(family)+'/members':'/api/identity/'+(kind==='family'?'families':'devices'),body);await relationships();renderProfile();await load();notify('已保存');}catch(e){failure(e);}};
 $('record-form').onsubmit=async e=>{
@@ -119,7 +124,6 @@ document.addEventListener('click',async e=>{
   const button=e.target.closest('button');if(!button)return;
   try{
     if(button.dataset.close){if(state.busy&&button.dataset.close==='record-dialog')return;$(button.dataset.close).close();}
-    if(button.dataset.user)await selectUser(button.dataset.user);
     if(button.dataset.tab){state.tab=button.dataset.tab;state.page=1;$('query').value='';await load();}
     if(button.dataset.detail)await detail(button.dataset.detail);
     if(button.dataset.conversation)await conversation(button.dataset.conversation);

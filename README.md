@@ -134,6 +134,12 @@ bash start.sh --profile openai      # 新的空库可用 OpenAI 预设
 
 ## 从完整迁移包恢复现有记忆
 
+新版已提供整库迁移：网页右上角「系统迁移」可导出、上传校验和准备恢复；恢复在重启时执行，先自动备份当前数据。
+也可停服后执行 `bash migrate.sh export` 和 `bash migrate.sh restore 文件.tar.gz`。
+迁移涵盖所有用户、家庭、设备、记忆、对话、日记、历史和资料；默认不带 API Key，保留原向量和记忆 ID。
+需要本机维护者的迁移管理码，避免普通用户导出其他成员私人数据。完整步骤和边界见 [迁移说明](local_runtime/MIGRATION.md)。
+
+以下为早期 Docker/Coder 原始迁移包的手动恢复方法：
 先停止源服务，并将解压后的迁移包中 `data/`、`materials/`、`config/` 完整复制到本目录对应位置。
 目标必须是尚未使用的空数据目录，不能将两份不同数据库合并覆盖。保留原迁移包作为备份。
 继续使用 qwen 配置，不更换 embedding 模型、维度或集合。然后执行 `bash start.sh`。

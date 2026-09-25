@@ -156,6 +156,8 @@ def install(app, service):
     def note(body: NoteInput):
         from .chat import memory_key
         user = viewer()
+        if user == "knowin_public":
+            raise HTTPException(403, "旧版公共资料身份只读，请切换到个人用户")
         access.require_context(user, body.family_id, body.device_id)
         if not body.text.strip() or (body.scope == "family" and not body.family_id):
             raise HTTPException(422, "内容不能为空，家庭共享必须选择家庭")

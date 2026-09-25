@@ -72,6 +72,8 @@ class Access:
             if db.execute("SELECT 1 FROM app_migrations WHERE name='identities-v1'").fetchone():
                 return
             scopes = list(db.execute("SELECT user_id,family_id,memory_user_id FROM chat_memory_scopes"))
+            if any(row["user_id"] == "knowin_public" for row in scopes):
+                db.execute("INSERT OR IGNORE INTO app_users VALUES ('knowin_public','公共资料（旧版只读）')")
             for item in items:
                 meta = item.get("metadata") or {}
                 raw = item.get("user_id", "")
@@ -135,7 +137,7 @@ class Access:
                 (d.family_id='' AND d.owner_user_id=?) OR EXISTS
                 (SELECT 1 FROM app_members m WHERE m.family_id=d.family_id AND m.user_id=?)
                 ORDER BY d.device_id""", (user, user))]
-        return {**dict(person), "families": families, "devices": devices, "mode": "passwordless_local"}
+        return {**dict(person), "families": families, "devices": devices, "mode": "passwordless_local", "read_only": user == "knowin_public"}
 
     def require_context(self, user, family="", device=""):
         profile = self.profile(user)
@@ -146,6 +148,8 @@ class Access:
         return profile
 
     def create_family(self, user, family, name):
+        if user == "knowin_public":
+            raise HTTPException(403, "旧版公共资料身份只读，请切换到个人用户")
         if not valid_id(family):
             raise HTTPException(422, "家庭 ID 格式无效")
         with self.db() as db:
@@ -165,6 +169,8 @@ class Access:
             db.execute("INSERT OR IGNORE INTO app_members VALUES (?,?)", (family, member))
 
     def create_device(self, user, family, device, name):
+        if user == "knowin_public":
+            raise HTTPException(403, "旧版公共资料身份只读，请切换到个人用户")
         profile = self.require_context(user, family)
         if not valid_id(device):
             raise HTTPException(422, "设备 ID 格式无效")

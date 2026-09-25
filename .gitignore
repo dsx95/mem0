@@ -19,3 +19,6 @@ __pycache__/
 *.sqlite-*
 *.sqlite3
 *.log
+migrations/
+.migration-key
+.runtime.lock

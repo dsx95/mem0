@@ -381,6 +381,8 @@ def create_app(settings=None, root=DEFAULT_ROOT, memory_factory=create_memory, m
     install_chat(app, service)
     from .management import install as install_management
     install_management(app, service)
+    from .migration_web import install as install_migration
+    install_migration(app, service)
 
     @app.middleware("http")
     async def boundaries(request, call_next):
@@ -407,7 +409,14 @@ def create_app(settings=None, root=DEFAULT_ROOT, memory_factory=create_memory, m
                 match = re.match(r"^/api/chat/sessions/([^/]+)", request.url.path)
                 if match and app.state.chat.session(match[1])["user_id"] != user:
                     raise HTTPException(404, "对话不存在")
-            response = await call_next(request)
+            if request.method not in {"GET", "HEAD", "OPTIONS"}:
+                async with service.migration.gate:
+                    allowed = {"/api/migration/cancel", "/api/identity/select"}
+                    if service.migration.pending and request.url.path not in allowed:
+                        raise HTTPException(409, "已准备迁移恢复，当前暂停写入；请重启或取消恢复")
+                    response = await call_next(request)
+            else:
+                response = await call_next(request)
         except HTTPException as exc:
             response = JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
         except Exception as exc:
@@ -544,6 +553,8 @@ def create_app(settings=None, root=DEFAULT_ROOT, memory_factory=create_memory, m
     async def upload(request: Request, filename: str, user_id: str = "", family_id: str = "", device_id: str = "", scope: str = "personal"):
         name = safe_filename(filename)
         user = viewer()
+        if user == "knowin_public":
+            raise HTTPException(403, "旧版公共资料身份只读，请切换到个人用户")
         if user_id and user_id != user:
             raise HTTPException(403, "不能上传到其他用户")
         service.access.require_context(user, family_id, device_id)
