@@ -1,3 +1,4 @@
+import {factNames,syncNames,showFact,clearFact} from './facts.js';
 const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const state = {me:null, users:[], tab:'longterm', page:1, epoch:0, relationship:'family', items:[], busy:false};
@@ -35,12 +36,12 @@ async function chooseUser(){
   if(!$('users-dialog').open)$('users-dialog').showModal();
 }
 async function selectUser(id){
-  state.epoch++;state.items=[];$('records').replaceChildren();$('job-list').replaceChildren();$('device-filter').value='';$('detail-dialog').close();
+  clearFact();state.epoch++;state.items=[];$('records').replaceChildren();$('job-list').replaceChildren();$('device-filter').value='';$('detail-dialog').close();
   state.me=await post('/api/identity/select',{user_id:id});state.page=1;renderProfile();$('users-dialog').close();$('query').value='';$('include-hidden').checked=false;
   await load();
 }
 function tags(item){return `<div class="tags"><span class="tag ${item.scope==='family'?'shared':item.scope==='public'?'public':''}">${item.scope==='public'?'公共内置':item.scope==='family'?'家庭共享':'仅自己'}</span><span class="tag">${esc(familyName(item.family_id))}</span><span class="tag">${esc(deviceName(item.device_id))}</span>${item.hidden?'<span class="tag">已对我隐藏</span>':''}</div>`;}
-function memoryCard(item){return `<article class="card ${item.hidden?'hidden-record':''}">${tags(item)}<p class="preview">${esc(item.memory)}</p><small>${item.metadata.source_file?esc(item.metadata.source_file)+' · ':''}${date(item.created_at)}${item.updated_at&&item.updated_at!==item.created_at?' · 更新 '+date(item.updated_at):''}</small><div class="card-actions"><button data-detail="${esc(item.id)}" ${item.hidden?'disabled':''}>查看详情</button><button data-hide="${esc(item.id)}" data-hidden="${!item.hidden}">${item.hidden?'恢复显示':'对我隐藏'}</button>${item.can_delete?`<button class="danger" data-delete-memory="${esc(item.id)}">删除</button>`:''}</div></article>`;}
+function memoryCard(item){return `<article class="card ${item.hidden?'hidden-record':''}">${tags(item)}${item.fact_status?`<div class="tags"><span class="tag fact-${esc(item.fact_status)}">${esc(factNames[item.fact_status])}</span><span class="tag">${esc(syncNames[item.sync_status])}</span></div>${item.subject?`<small>${esc(item.subject)} · ${esc(item.attribute)}</small>`:''}`:''}<p class="preview">${esc(item.memory)}</p><small>${item.metadata.source_file?esc(item.metadata.source_file)+' · ':''}${date(item.created_at)}${item.updated_at&&item.updated_at!==item.created_at?' · 更新 '+date(item.updated_at):''}</small><div class="card-actions"><button data-detail="${esc(item.id)}" >详情与历史</button><button data-hide="${esc(item.id)}" data-hidden="${!item.hidden}">${item.hidden?'恢复显示':'对我隐藏'}</button>${item.can_delete?`<button class="danger" data-delete-memory="${esc(item.id)}">删除</button>`:''}</div></article>`;}
 function conversationCard(item){return `<article class="card">${tags({...item,scope:'personal'})}<h3>${esc(item.title)}</h3><small>${item.turn_count} 轮对话 · 更新 ${date(item.updated_at)}</small><div class="card-actions"><button data-conversation="${esc(item.id)}">查看记录</button><a href="/chat?session=${encodeURIComponent(item.id)}">继续对话 ↗</a><button class="danger" data-delete-session="${esc(item.id)}">删除对话</button></div></article>`;}
 function diaryCard(item,index){return `<article class="card"><div class="tags"><span class="tag">私人日记</span><span class="tag">${esc(familyName(item.family_id))}</span>${item.device_ids.map(d=>`<span class="tag">${esc(deviceName(d))}</span>`).join('')}</div><h3>${esc(item.date)}</h3><p class="preview">${esc(item.summary|| (item.device_filtered?'已筛选设备。请查看该设备的原始对话。':'完整对话已保存；日记尚未整理。'))}</p><small>${item.turn_count} 轮对话 · 北京时间</small><div class="card-actions"><button data-diary="${index}">查看日记</button><button class="danger" data-delete-diary="${index}">删除当日记录</button></div></article>`;}
 async function load(){
@@ -49,9 +50,12 @@ async function load(){
   $('breadcrumb').textContent=type[0];$('title').textContent=type[1];$('subtitle').textContent=type[2];$('type-hint').textContent=type[3];$('alert').hidden=true;
   $('add-record').hidden=!['builtin','longterm'].includes(tab);$('add-record').textContent=tab==='builtin'?'＋ 添加资料':'＋ 添加记忆';$('hidden-control').hidden=!['builtin','longterm'].includes(tab);$('imports').hidden=tab!=='builtin';$('query').disabled=tab==='diaries';
   $('add-record').disabled=Boolean(state.me.read_only);
+  $('fact-state-control').hidden=tab!=='longterm';$('fact-tasks').hidden=tab!=='longterm';
+  if(tab==='longterm')$('type-hint').textContent='查看完整版本、更新、纠错和处理冲突。待确认或撤回的事实不作为有效记忆检索；删除清除全部事实版本，原始对话另行管理。';
   document.querySelectorAll('[data-tab]').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));
   $('records').innerHTML='<div class="empty">正在读取你的记录…</div>';
   const params=new URLSearchParams({family_id:$('family-filter').value,device_id:$('device-filter').value,page:state.page,q:$('query').value.trim()});
+  if(tab==='longterm')params.set('fact_status',$('fact-state').value);
   let endpoint='/api/manage/'+(tab==='conversations'?'conversations':tab==='diaries'?'diaries':'memories');
   if(['builtin','longterm'].includes(tab)){params.set('memory_type',tab);params.set('include_hidden',$('include-hidden').checked);}
   try{
@@ -60,16 +64,24 @@ async function load(){
     state.items=data.items;$('result-count').textContent=data.total;$('scope-caption').textContent=' · '+state.me.name+'可见';
     $('records').innerHTML=data.items.length?data.items.map(tab==='conversations'?conversationCard:tab==='diaries'?diaryCard:memoryCard).join(''):'<div class="empty">这里还没有记录。<br>试试切换家庭或设备，或添加一条属于你的记忆。</div>';
     $('page-label').textContent=`第 ${state.page} / ${Math.max(1,Math.ceil(data.total/20))} 页`;$('previous').disabled=state.page===1;$('next').disabled=state.page*20>=data.total;
-    if(tab==='builtin')await jobs();
+    if(tab==='builtin')await jobs();if(tab==='longterm')await factTasks();
   }catch(e){if(epoch===state.epoch){$('records').innerHTML='<div class="empty">读取失败，请重试。</div>';failure(e);}}
 }
 async function jobs(){
   const epoch=state.epoch,data=await api('/api/jobs');if(epoch!==state.epoch)return;
   $('job-list').innerHTML=data.items.slice(0,20).map(j=>`<div class="job">${esc(j.filename)} · ${esc(j.message)} ${j.error?' · '+esc(j.error):''}${j.status==='failed'?`<button data-retry="${esc(j.id)}">重试</button>`:''}</div>`).join('')||'<p class="muted">暂无资料导入任务。</p>';
 }
+async function factTasks(){
+  const epoch=state.epoch,data=await api('/api/manage/tasks');if(epoch!==state.epoch)return;
+  $('fact-task-list').innerHTML=data.items.map(t=>`<div class="job">${esc(t.operation)} · ${esc(syncNames[t.status])} · 已尝试 ${t.attempts} 次 · ${esc(t.fact_id)}${t.can_retry&&t.status==='failed'?`<button data-task-retry="${esc(t.fact_id)}">重试</button>`:''}</div>`).join('')||'<p class="muted">所有事实索引已同步。</p>';
+}
 async function detail(id){
-  const epoch=state.epoch,data=await api('/api/memories/'+encodeURIComponent(id));if(epoch!==state.epoch)return;
-  $('detail-title').textContent='记忆详情';$('detail-content').innerHTML=`${tags(data)}<div class="detail-text">${esc(data.memory)}</div><p>创建 ${date(data.created_at)} · 更新 ${date(data.updated_at)}</p>${data.metadata.source_file?`<p>来源：${esc(data.metadata.source_file)}</p><a href="/api/memories/${encodeURIComponent(id)}/file?download=true" target="_blank" rel="noopener">下载源文件 ↗</a>`:''}<p>记忆 ID：${esc(id)}</p>`;$('detail-dialog').showModal();
+  const epoch=state.epoch,data=await api('/api/manage/records/'+encodeURIComponent(id));if(epoch!==state.epoch)return;
+  $('detail-title').textContent='记忆详情';$('detail-content').innerHTML=`${tags(data)}<div class="detail-text">${esc(data.memory)}</div><p>创建 ${date(data.created_at)} · 更新 ${date(data.updated_at)}</p>${data.metadata.source_file?`<p>来源：${esc(data.metadata.source_file)}</p>${data.hidden?'<small>恢复显示后可下载源文件。</small>':`<a href="/api/memories/${encodeURIComponent(id)}/file?download=true" target="_blank" rel="noopener">下载源文件 ↗</a>`}`:''}<p>记忆 ID：${esc(id)}</p>`;
+  if(data.fact_status)showFact(data,{api,esc,date,refresh:load,detail,notify,failure,user:()=>state.me?.user_id});
+  else if(data.history?.length)$('detail-content').innerHTML+='<h3>修改历史</h3>'+data.history.map(h=>'<pre class="detail-text">'+esc(JSON.stringify(h,null,2))+'</pre>').join('');
+  $('detail-content').innerHTML+='<details><summary>完整来源信息</summary><pre class="detail-text">'+esc(JSON.stringify(data.metadata,null,2))+'</pre></details>';
+  if(!$('detail-dialog').open)$('detail-dialog').showModal();
 }
 async function conversation(id){
   const epoch=state.epoch,data=await api('/api/chat/sessions/'+encodeURIComponent(id));if(epoch!==state.epoch)return;
@@ -81,7 +93,7 @@ function diaryURL(item){const params=new URLSearchParams({date:item.date});const
 async function diary(index){
   const item=state.items[index],epoch=state.epoch,data=await api(diaryURL(item));if(epoch!==state.epoch)return;
   $('detail-title').textContent=data.date+' · 日记';
-  $('detail-content').innerHTML=(data.summary?'<div class="detail-text">'+esc(data.summary)+'</div>':'<p>以下为完整原始记录。</p>')+data.entries.map(e=>`<article class="detail-turn"><small>${date(e.created_at)} · ${esc(deviceName(e.device_id))}</small><p><strong>你</strong></p><div class="detail-text">${esc(e.user_text)}</div><p><strong>助手</strong></p><div class="detail-text">${esc(e.answer)}</div></article>`).join('');$('detail-dialog').showModal();
+  $('detail-content').innerHTML=(data.summary?'<div class="detail-text">'+esc(data.summary)+'</div>':'<p>以下为完整原始记录。</p>')+(data.new_preferences?.length?'<h3>当天新偏好（摘要候选）</h3>'+data.new_preferences.map(p=>'<p class="detail-text">'+esc(p.text)+'</p>').join(''):'')+data.entries.map(e=>`<article class="detail-turn"><small>${date(e.created_at)} · ${esc(deviceName(e.device_id))}</small><p><strong>你</strong></p><div class="detail-text">${esc(e.user_text)}</div><p><strong>助手</strong></p><div class="detail-text">${esc(e.answer)}</div></article>`).join('');$('detail-dialog').showModal();
 }
 async function relationships(){
   state.me=await api('/api/identity/me');
@@ -97,7 +109,7 @@ async function relationshipForm(kind){
 }
 function recordDevices(){const family=$('record-family').value;options($('record-device'),state.me.devices.filter(d=>d.family_id===family).map(d=>[d.device_id,d.name]),[['','未标记设备']]);const option=$('record-scope').querySelector('[value="family"]');option.disabled=!family;if(!family)$('record-scope').value='personal';}
 function newRecord(){
-  $('record-form').reset();$('record-title').textContent=state.tab==='builtin'?'添加内置资料':'添加长期记忆';$('file-label').hidden=state.tab!=='builtin';
+  $('record-form').reset();$('record-fact-fields').hidden=state.tab!=='longterm';$('record-subject').required=$('record-attribute').required=state.tab==='longterm';$('record-title').textContent=state.tab==='builtin'?'添加内置资料':'添加长期记忆';$('file-label').hidden=state.tab!=='builtin';
   options($('record-family'),state.me.families.map(f=>[f.family_id,f.name]),[['','个人空间']]);
   const family=$('family-filter').value;if(family&&family!=='__none__')$('record-family').value=family;recordDevices();const device=$('device-filter').value;if(device&&device!=='__none__')$('record-device').value=device;
   $('record-dialog').showModal();
@@ -109,7 +121,7 @@ $('record-form').onsubmit=async e=>{
   e.preventDefault();if(state.busy)return;state.busy=true;$('save-record').disabled=true;
   try{const context={family_id:$('record-family').value,device_id:$('record-device').value,scope:$('record-scope').value};const file=$('record-file').files[0];
     if(state.tab==='builtin'&&file){await api('/api/uploads?'+new URLSearchParams({...context,filename:file.name}),{method:'POST',body:file,headers:{'Content-Type':'application/octet-stream'}});notify('已上传，正在后台导入');}
-    else{await post('/api/manage/notes',{...context,text:$('record-text').value.trim(),memory_type:state.tab});notify('已保存');}
+    else{const result=await post('/api/manage/notes',{...context,text:$('record-text').value.trim(),memory_type:state.tab,...(state.tab==='longterm'?{subject:$('record-subject').value.trim(),attribute:$('record-attribute').value.trim()}:{})});notify(result.status==='disputed'?'存在不同说法，已提交冲突待确认':'已保存');}
     $('record-dialog').close();await load();
   }catch(e){failure(e);}finally{state.busy=false;$('save-record').disabled=false;}
 };
@@ -118,7 +130,7 @@ $('record-family').onchange=recordDevices;
 $('switch-user').onclick=()=>chooseUser().catch(failure);$('relationships').onclick=()=>relationships().catch(failure);
 $('new-family').onclick=()=>relationshipForm('family');$('new-device').onclick=()=>relationshipForm('device');$('add-member').onclick=()=>relationshipForm('member').catch(failure);
 $('add-record').onclick=newRecord;$('refresh').onclick=load;
-$('family-filter').onchange=()=>{filterDevices();state.page=1;load();};$('device-filter').onchange=$('include-hidden').onchange=()=>{state.page=1;load();};
+$('family-filter').onchange=()=>{filterDevices();state.page=1;load();};$('fact-state').onchange=$('device-filter').onchange=$('include-hidden').onchange=()=>{state.page=1;load();};
 $('search-form').onsubmit=e=>{e.preventDefault();state.page=1;load();};$('previous').onclick=()=>{state.page--;load();};$('next').onclick=()=>{state.page++;load();};
 document.addEventListener('click',async e=>{
   const button=e.target.closest('button');if(!button)return;
@@ -129,12 +141,13 @@ document.addEventListener('click',async e=>{
     if(button.dataset.conversation)await conversation(button.dataset.conversation);
     if(button.dataset.diary!==undefined)await diary(Number(button.dataset.diary));
     if(button.dataset.hide){await post('/api/memories/'+encodeURIComponent(button.dataset.hide)+'/visibility',{hidden:button.dataset.hidden==='true'});await load();}
-    if(button.dataset.deleteMemory&&confirm('删除这条记忆及其修改历史？删除后不可撤销。原始对话可在“短期与对话”中另行删除；资料源文件仍保留。')){button.disabled=true;await api('/api/memories/'+encodeURIComponent(button.dataset.deleteMemory),{method:'DELETE'});await load();notify('记忆已删除');}
+    if(button.dataset.deleteMemory&&confirm('删除这条记忆及其全部版本、冲突候选和修改历史？删除后不可撤销。原始对话可在“短期与对话”中另行删除；资料源文件仍保留。')){button.disabled=true;await api('/api/memories/'+encodeURIComponent(button.dataset.deleteMemory),{method:'DELETE'});await load();notify('记忆已删除');}
     if(button.dataset.deleteSession&&confirm('删除整段对话及对应日记副本？删除后不可撤销。已独立保存的长期记忆仍保留。')){button.disabled=true;await api('/api/chat/sessions/'+encodeURIComponent(button.dataset.deleteSession),{method:'DELETE'});await load();notify('对话及日记副本已删除');}
     if(button.dataset.deleteTurn&&confirm('删除这一轮原始对话及日记副本？长期记忆仍保留。')){await api('/api/chat/sessions/'+encodeURIComponent(button.dataset.session)+'/turns/'+encodeURIComponent(button.dataset.deleteTurn),{method:'DELETE'});await conversation(button.dataset.session);await load();notify('这一轮对话已删除');}
     if(button.dataset.deleteDiary!==undefined&&confirm('删除筛选范围内当天的日记和对应原始对话？长期记忆仍保留；此操作不可撤销。')){const item=state.items[Number(button.dataset.deleteDiary)];await api(diaryURL(item),{method:'DELETE'});await load();notify('当日记录已删除');}
+    if(button.dataset.taskRetry){await post('/api/manage/facts/'+encodeURIComponent(button.dataset.taskRetry)+'/retry',{});await factTasks();}
     if(button.dataset.retry){await post('/api/jobs/'+encodeURIComponent(button.dataset.retry)+'/retry',{});await jobs();}
   }catch(e){button.disabled=false;failure(e);}
 });
-let polling=false;setInterval(async()=>{if(document.hidden||polling||state.tab!=='builtin'||!state.me)return;polling=true;try{await jobs();}catch{}finally{polling=false;}},4000);
+let polling=false;setInterval(async()=>{if(document.hidden||polling||!['builtin','longterm'].includes(state.tab)||!state.me)return;polling=true;try{if(state.tab==='builtin')await jobs();else await factTasks();}catch{}finally{polling=false;}},4000);
 try{const response=await fetch('/api/identity/me');if(response.ok){state.me=await response.json();renderProfile();await load();if(new URLSearchParams(location.search).has("users"))await chooseUser();}else await chooseUser();}catch(e){failure(e);}

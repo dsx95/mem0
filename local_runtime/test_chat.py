@@ -108,7 +108,7 @@ def message(client, sid, text="记住我喜欢茶", request_id=None, **context):
 
 def test_real_protocol_streamed_tool_ids_and_persisted_new_session(console):
     client, chat, service = console
-    model = Model([function({"action": "remember", "text": "喜欢喝茶"}), [chunk("已记住。"), chunk(finish="stop")]])
+    model = Model([function({"action": "remember", "text": "喜欢喝茶", "subject": "本人", "attribute": "饮品偏好"}), [chunk("已记住。"), chunk(finish="stop")]])
     chat.client_factory = lambda: model
     sid = session(client)
     events = message(client, sid)
@@ -147,13 +147,14 @@ def test_scope_cannot_be_selected_by_model_and_library_is_read_only(console):
 
 def test_repeated_write_and_request_dedup(console):
     client, chat, service = console
-    args = {"action": "remember", "text": "喜欢喝茶"}
+    args = {"action": "remember", "text": "喜欢喝茶", "subject": "本人", "attribute": "饮品偏好"}
     model = Model([function(args), function(args, identity="call-two"), [chunk("好了"), chunk(finish="stop")]])
     chat.client_factory = lambda: model
     sid = session(client)
     request_id = str(uuid.uuid4())
     message(client, sid, request_id=request_id)
-    assert service.memory.add_calls == 1
+    with chat.db() as db:
+        assert db.execute("SELECT COUNT(*) FROM fact_events WHERE action='created'").fetchone()[0] == 1
     response = client.post(f"/api/chat/sessions/{sid}/messages", headers=HEADERS, json={"text": "same", "request_id": request_id})
     assert response.status_code == 409
 

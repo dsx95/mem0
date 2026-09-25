@@ -20,7 +20,7 @@ import uuid
 import portalocker
 
 FORMAT = "knowin-memory-migration"
-VERSION = 1
+VERSION = 2
 MAX_BYTES = 50 * 1024**3
 MAX_FILES = 100000
 ROOT = Path(__file__).resolve().parent.parent
@@ -186,6 +186,10 @@ def counts(stage):
             for key, table in [("sessions", "chat_sessions"), ("turns", "chat_turns"), ("diary_entries", "daily_diary_entries")]:
                 if table in tables:
                     result[key] = db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            if "facts" in tables:
+                result["facts"] = db.execute("SELECT COUNT(*) FROM facts WHERE status<>'deleted'").fetchone()[0]
+                result["fact_versions"] = db.execute("SELECT COUNT(*) FROM fact_versions").fetchone()[0]
+                result["fact_tasks"] = db.execute("SELECT COUNT(*) FROM fact_outbox WHERE status<>'done'").fetchone()[0]
     result["users"] = len(users)
     for path in (stage / "data").glob("*_history.db"):
         with closing(sqlite3.connect(path)) as db, db:
@@ -308,7 +312,7 @@ def _extract_bundle(package, stage):
             with archive.extractfile(member) as src, path.open("xb") as out:
                 shutil.copyfileobj(src, out, length=1024 * 1024)
     manifest = json.loads((stage / "manifest.json").read_text())
-    if manifest.get("format") != FORMAT or manifest.get("version") != VERSION:
+    if manifest.get("format") != FORMAT or manifest.get("version") not in {1, VERSION}:
         raise MigrationError("迁移包格式/版本不支持")
     files = manifest.get("files", {})
     if set(files) | {"manifest.json"} != seen or "vectors.jsonl" not in files:

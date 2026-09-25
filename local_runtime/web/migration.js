@@ -7,7 +7,7 @@ async function migrationAPI(path,options={}){
   if(!response.ok)throw new Error(typeof data.detail==='string'?data.detail:`操作失败（${response.status}）`);
   return data;
 }
-function migrationCounts(c){return `${c.users} 个用户 · ${c.memories} 条记忆 · ${c.sessions} 段对话 · ${c.turns} 轮对话 · ${c.diary_entries} 条日记原文 · ${c.source_files} 个源文件`;}
+function migrationCounts(c){return `${c.users} 个用户 · ${c.memories} 条向量记录${c.facts!==undefined?` · ${c.facts} 条长期事实 / ${c.fact_versions} 个版本 / ${c.fact_tasks} 项未完成同步`:''} · ${c.sessions} 段对话 · ${c.turns} 轮对话 · ${c.diary_entries} 条日记原文 · ${c.source_files} 个源文件`;}
 async function migrationTask(action){
   if(migrationBusy)return;
   migrationBusy=true;migrationElement('migration-dialog').setAttribute('aria-busy','true');

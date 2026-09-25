@@ -25,7 +25,7 @@ def test_diary_collects_all_sessions_and_new_memories_but_stays_private(console)
     bob = session(client, user_id="bob", family_id="home1", use_library=False)
     other_home = session(client, user_id="alice", family_id="home2", use_library=False)
     chat.client_factory = lambda: Model([
-        function({"action": "remember", "text": "我喜欢无糖拿铁"}),
+        function({"action": "remember", "text": "我喜欢无糖拿铁", "subject": "本人", "attribute": "饮品偏好"}),
         [chunk("已记住。"), chunk(finish="stop")],
     ])
     message(client, alice, "请记住：我喜欢无糖拿铁")

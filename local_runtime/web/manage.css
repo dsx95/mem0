@@ -3,3 +3,5 @@
 .filters form button{white-space:nowrap;flex-shrink:0}
 
 #migration-tools{border:0;padding:0;margin:24px 0}#migration-tools h3{font-size:15px;font-weight:500;margin-top:26px}.migration-message{white-space:pre-wrap;font-size:12px;line-height:1.9;color:var(--green);overflow-wrap:anywhere}.migration-error{color:#a66253}.migration-check{display:flex;gap:8px;align-items:center;font-size:11px;line-height:1.8;margin:17px 0}#migration-download{margin:0;font-size:12px}#migration-dialog code{word-break:break-all}
+
+.fact-disputed{background:#fff0d9;color:#805000}.fact-retracted{background:#ededeb;color:#666}.fact-warning{padding:14px;background:#fff0d9;color:#805000;line-height:1.7}.list-toolbar{flex-wrap:wrap}#fact-state-control{display:flex;align-items:center;gap:8px}#fact-state{padding:7px}#record-fact-fields[hidden]{display:none}

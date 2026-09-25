@@ -37,6 +37,30 @@ class NoteInput(Input):
     device_id: str = ""
     scope: Literal["personal", "family"] = "personal"
     memory_type: Literal["builtin", "longterm"] = "longterm"
+    subject: str = Field(default="", max_length=120)
+    attribute: str = Field(default="", max_length=120)
+    occurred_at: str = Field(default="", max_length=40)
+
+
+class FactUpdate(Input):
+    revision: int = Field(ge=1)
+    text: str = Field(min_length=1, max_length=6000)
+    kind: Literal["change", "correction", "assertion"] = "change"
+    occurred_at: str = Field(default="", max_length=40)
+    reason: str = Field(default="", max_length=1000)
+    subject: str = Field(default="", max_length=120)
+    attribute: str = Field(default="", max_length=120)
+
+
+class FactResolution(Input):
+    revision: int = Field(ge=1)
+    version: int = Field(ge=1)
+    kind: Literal["change", "correction"] = "change"
+    reason: str = Field(min_length=1, max_length=1000)
+
+
+class RevisionInput(Input):
+    revision: int = Field(ge=1)
 
 
 class HiddenInput(Input):
@@ -62,7 +86,7 @@ def delete_memory(service, chat, user, memory_id):
     with chat.lock, service.memory_lock:
         if chat.runs:
             raise HTTPException(409, "仍有对话正在回复，请完成或停止回复后删除")
-        item = next((i for i in service.access.visible(service.snapshot(), user, True) if i["id"] == memory_id), None)
+        item = next((i for i in service.access.visible(service.snapshot(all_states=True), user, True) if i["id"] == memory_id), None)
         with service.access.db() as db:
             pending = db.execute("SELECT user_id FROM app_deleted WHERE memory_id=?", (memory_id,)).fetchone()
         if not item and not (pending and pending[0] == user):
@@ -75,7 +99,9 @@ def delete_memory(service, chat, user, memory_id):
             raise HTTPException(409, "这份资料正在导入，请等待导入结束后删除")
         with service.access.db() as db:
             db.execute("INSERT OR IGNORE INTO app_deleted VALUES (?,?,?)", (memory_id, user, time.time()))
-        if any(i["id"] == memory_id for i in service.snapshot()):
+        service.facts.erase(user, memory_id)
+        service.facts.sync_one(memory_id)
+        if not (item and item.get("fact_status")) and any(i["id"] == memory_id for i in service.snapshot()):
             try:
                 service.memory.delete(memory_id)
             except ValueError:
@@ -144,11 +170,13 @@ def install(app, service):
 
     @app.get("/api/manage/memories")
     def memories(memory_type: Literal["all", "builtin", "longterm"] = "all", family_id: str = "", device_id: str = "",
-                 q: str = "", include_hidden: bool = False, page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100)):
+                 q: str = "", include_hidden: bool = False, fact_status: Literal["all", "active", "disputed", "retracted"] = "all",
+                 page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100)):
         user = viewer()
         filtered_context(access, user, family_id, device_id)
-        items = [i for i in access.visible(service.snapshot(), user, include_hidden)
+        items = [i for i in access.visible(service.snapshot(all_states=True), user, include_hidden)
                  if matches(i, family_id, device_id) and (memory_type == "all" or i["memory_type"] == memory_type)
+                 and (fact_status == "all" or i.get("fact_status", "active") == fact_status)
                  and (not q or q.casefold() in (i["memory"] + i["metadata"].get("source_file", "")).casefold())]
         return {"items": items[(page - 1) * page_size:page * page_size], "total": len(items), "page": page}
 
@@ -164,6 +192,11 @@ def install(app, service):
         key = (library_key(user, body.family_id, body.device_id, body.scope == "family") if body.memory_type == "builtin"
                else memory_key(user, body.family_id, shared=True) if body.scope == "family"
                else chat.memory_binding(user, body.family_id))
+        if body.memory_type == "longterm":
+            result = service.facts.submit(user=user, key=key, family=body.family_id, device=body.device_id,
+                                          visibility=body.scope, text=body.text, subject=body.subject,
+                                          attribute=body.attribute, occurred_at=body.occurred_at, trusted=True)
+            return {**result, "results": [{"id": result["id"], "event": "CONFLICT" if result["status"] == "disputed" else "ADD"}]}
         with service.memory_lock:
             result = service.memory.add(body.text.strip(), user_id=key, infer=False, metadata={
                 "owner_user_id": user, "family_id": body.family_id, "device_id": body.device_id,
@@ -177,10 +210,52 @@ def install(app, service):
 
     @app.post("/api/memories/{memory_id}/visibility")
     def hidden(memory_id: str, body: HiddenInput):
-        if not any(i["id"] == memory_id for i in access.visible(service.snapshot(), viewer(), True)):
+        if not any(i["id"] == memory_id for i in access.visible(service.snapshot(all_states=True), viewer(), True)):
             raise HTTPException(404, "记忆不存在")
         access.hide(viewer(), memory_id, body.hidden)
         return {"hidden": body.hidden}
+
+    @app.get("/api/manage/facts/{memory_id}")
+    def fact(memory_id: str):
+        return service.facts.get(viewer(), memory_id)
+
+    @app.get("/api/manage/tasks")
+    def tasks():
+        return {"items": service.facts.tasks(viewer())}
+
+    @app.get("/api/manage/records/{memory_id}")
+    def managed_detail(memory_id: str):
+        item = next((i for i in access.visible(service.snapshot(all_states=True), viewer(), True) if i["id"] == memory_id), None)
+        if item is None:
+            raise HTTPException(404, "记录不存在")
+        if item.get("fact_status"):
+            return service.facts.get(viewer(), memory_id)
+        with service.memory_lock:
+            return {**item, "history": service.memory.history(memory_id)}
+
+    @app.patch("/api/manage/facts/{memory_id}")
+    def update_fact(memory_id: str, body: FactUpdate):
+        item = service.facts.get(viewer(), memory_id, write=True)
+        result = service.facts.submit(user=viewer(), key=item["user_id"], family=item["family_id"],
+            device=item["device_id"], visibility=item["scope"], text=body.text, mid=memory_id,
+            expected_revision=body.revision, kind=body.kind, occurred_at=body.occurred_at,
+            reason=body.reason, subject=body.subject, attribute=body.attribute, trusted=True)
+        return {**service.facts.get(viewer(), memory_id), "outcome": result["status"]}
+
+    @app.post("/api/manage/facts/{memory_id}/resolve")
+    def resolve_fact(memory_id: str, body: FactResolution):
+        service.facts.resolve(viewer(), memory_id, body.revision, body.version, body.kind, body.reason)
+        return service.facts.get(viewer(), memory_id)
+
+    @app.post("/api/manage/facts/{memory_id}/retract")
+    def retract_fact(memory_id: str, body: RevisionInput):
+        service.facts.retract(viewer(), memory_id, body.revision)
+        return {"retracted": True}
+
+    @app.post("/api/manage/facts/{memory_id}/retry")
+    def retry_fact(memory_id: str):
+        service.facts.retry(viewer(), memory_id)
+        return {"queued": True}
 
     @app.get("/api/manage/conversations")
     def conversations(family_id: str = "", device_id: str = "", q: str = "", page: int = Query(1, ge=1)):

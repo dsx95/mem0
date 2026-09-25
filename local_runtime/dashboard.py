@@ -70,6 +70,8 @@ class Dashboard:
         self.directory.mkdir(parents=True, exist_ok=True)
         self.jobs_db = self.directory / "jobs.sqlite"
         self.access = Access(self.directory / "chat.sqlite")
+        from .facts import Facts
+        self.facts = Facts(self)
         self.limit = max_upload_mb * 1024 * 1024
         self.memory = None
         self.reranker = Reranker(getattr(settings, "rerank", None))
@@ -103,6 +105,7 @@ class Dashboard:
             self.reranker = self.memory.runtime_reranker
         self.refresh()
         self.access.bootstrap(self.snapshot())
+        self.facts.start()
         for job in list(self.jobs.values()):
             if job["status"] in ACTIVE:
                 self.save_job(job["id"], status="queued", message="服务重启，等待恢复导入", error=None)
@@ -112,6 +115,7 @@ class Dashboard:
 
     def stop(self):
         self.stopping.set()
+        self.facts.stop()
         self.pending.put(None)
         if self.worker:
             self.worker.join()
@@ -151,10 +155,12 @@ class Dashboard:
         values.sort(key=lambda x: (x.get("created_at") or "", x["id"]), reverse=True)
         with self.state_lock:
             self.items = values
+        self.facts.bootstrap(values)
 
-    def snapshot(self):
+    def snapshot(self, *, all_states=False):
         with self.state_lock:
-            return list(self.items)
+            items = list(self.items)
+        return self.facts.overlay(items, all_states=all_states)
 
     def visible_snapshot(self):
         return self.access.visible(self.snapshot(), viewer())
@@ -515,9 +521,11 @@ def create_app(settings=None, root=DEFAULT_ROOT, memory_factory=create_memory, m
 
     @app.get("/api/memories/{memory_id}")
     def detail(memory_id: str):
-        item = next((i for i in service.visible_snapshot() if i["id"] == memory_id), None)
+        item = next((i for i in service.access.visible(service.snapshot(all_states=True), viewer()) if i["id"] == memory_id), None)
         if item is None:
             raise HTTPException(404, "记忆不存在")
+        if item.get("fact_status"):
+            return {**service.facts.get(viewer(), memory_id), "history": []}
         with service.memory_lock:
             history = service.memory.history(memory_id)
         return {**item, "history": history}

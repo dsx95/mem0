@@ -18,8 +18,8 @@
 | `POST /api/identity/families` | 当前用户创建家庭：`family_id, name` |
 | `POST /api/identity/families/{family_id}/members` | 家庭创建者添加已有用户：`user_id` |
 | `POST /api/identity/devices` | 登记设备：`device_id, name, family_id`；family_id 空表示个人设备 |
-| `GET /api/manage/memories` | `memory_type=builtin/longterm/all, family_id, device_id, q, page, page_size, include_hidden` |
-| `POST /api/manage/notes` | 手动添加：`text, family_id, device_id, scope=personal/family, memory_type=builtin/longterm` |
+| `GET /api/manage/memories` | `memory_type=builtin/longterm/all, family_id, device_id, q, page, page_size, include_hidden, fact_status=all/active/disputed/retracted` |
+| `POST /api/manage/notes` | 手动添加：`text, family_id, device_id, scope=personal/family, memory_type=builtin/longterm；长期事实增加 subject, attribute, occurred_at` |
 | `POST /api/uploads` | 原始文件请求体；查询参数 `filename, family_id, device_id, scope`；`Content-Type: application/octet-stream` |
 | `GET /api/manage/conversations` | 当前用户对话：`family_id, device_id, q, page`；q 搜索对话标题 |
 | `GET /api/manage/diaries` | 当前用户按天归档：`family_id, device_id, page` |
@@ -65,3 +65,7 @@
 部署仍为单进程 SQLite + Qdrant Local。关系表、Cookie 哈希、隐藏状态和删除重试标记与聊天共用
 `data/dashboard/chat.sqlite`；向量和修改历史沿用原来的数据库，不因用户或设备数量新建数据库。
 CLI 和原生 Mem0 不经过这层网页授权，只能作为受信任的运维接口。
+
+长期事实的版本、冲突确认、撤回及同步任务接口见 [事实管理说明](FACTS.md)。
+`GET /api/manage/records/{id}` 可查看有权限的隐藏记录和历史；正常召回仍过滤隐藏记录。
+删除长期事实同时清理全部版本和候选；Qdrant 清理失败会持久重试，删除标记即时阻止读取。
