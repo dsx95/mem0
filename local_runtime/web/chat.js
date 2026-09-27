@@ -84,10 +84,10 @@ async function sessions(){
 }
 function toolCard(event){
   const details=document.createElement('details'); details.className='tool-card '+event.status; details.dataset.call=event.id;
-  const action=event.arguments?.action, remember=action==='remember';
-  const name=action==='diary'?'查看每日记事':remember?(event.result?.scope==='family'?'保存家庭共享记忆':'保存一条记忆'):event.arguments?.scope==='library'?'检索资料原文':'查找相关记忆';
+  const action=event.arguments?.action, remember=action==='remember',todo=event.name==='todo';
+  const name=todo?({list:'查询待办清单',get:'查看待办详情',create:'创建待办',update:'更新待办',delete:'删除待办'}[action]||'管理待办'):action==='diary'?'查看每日记事':remember?(event.result?.scope==='family'?'保存家庭共享记忆':'保存一条记忆'):event.arguments?.scope==='library'?'检索资料原文':'查找相关记忆';
   const count=event.result?.memories?.length;
-  const caption=event.status==='running'?'进行中':event.status==='error'?'未完成':action==='diary'?`${event.result?.turn_count ?? 0} 轮对话`:remember?'已保存':`找到 ${count ?? 0} 条`;
+  const caption=event.status==='running'?'进行中':event.status==='error'?'未完成':todo?(action==='list'?`共 ${event.result?.total??0} 项`:'已完成操作'):action==='diary'?`${event.result?.turn_count ?? 0} 轮对话`:remember?'已保存':`找到 ${count ?? 0} 条`;
   const ranking=event.result?.rerank?.status,rankingCaption=ranking==='applied'?' · 已重排':ranking==='fallback'?' · 重排失败，使用原排序':'';
   details.innerHTML=`<summary>${icon(remember?'spark':'search')}<span>${name}</span><span class="tool-caption">${escape(caption+rankingCaption)}</span></summary><div class="tool-data"><label>调用 ${escape(event.name || 'mem0')}</label><pre>${escape(JSON.stringify(event.arguments,null,2))}</pre>${event.result?'<label>返回结果</label><pre>'+escape(JSON.stringify(event.result,null,2))+'</pre>':''}</div>`;
   return details;

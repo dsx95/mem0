@@ -1,8 +1,9 @@
+import {createTodos} from './todos.js';
 import {factNames,syncNames,showFact,clearFact} from './facts.js';
 const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const state = {me:null, users:[], tab:'longterm', page:1, epoch:0, relationship:'family', items:[], busy:false};
-const types = {builtin:['内置资料','让资料，成为随时可用的知识。','说明书、参考资料，以及家庭和设备的预置知识。','共享资料可以对自己隐藏；有管理权限的记录可以删除。'],longterm:['长期记忆','值得记住的，都在这里。','查看你的偏好、约定与家庭共享记忆，决定留下什么。','删除长期记忆后，不会再被检索；原始对话可另行删除；资料源文件暂时保留。'],conversations:['短期与对话','每一段对话，都有来处。','只有你能查看自己的原始对话，不因家庭或设备共享而公开。','模型短期上下文使用最近 12 轮已完成对话（最多 32000 字符）；这里可管理完整记录。'],diaries:['每日记事','把日常，留在时间里。','按北京时间归档对话与当天的新偏好。','删除日记会同时删除对应原始对话轮次，避免再次回填；独立长期记忆会保留。']};
+const state = {me:null, users:[], tab:new URLSearchParams(location.search).get('tab')==='todos'?'todos':'longterm', page:1, epoch:0, relationship:'family', items:[], busy:false};
+const types = {todos:['待办清单','把计划，一件件完成。','管理个人与家庭待办，安排时间、负责人和每一步行动。','今天 / 未来 7 天按北京时间筛选。完成、取消保留历史；删除待办不会删除原始聊天和已有备份。'],builtin:['内置资料','让资料，成为随时可用的知识。','说明书、参考资料，以及家庭和设备的预置知识。','共享资料可以对自己隐藏；有管理权限的记录可以删除。'],longterm:['长期记忆','值得记住的，都在这里。','查看你的偏好、约定与家庭共享记忆，决定留下什么。','删除长期记忆后，不会再被检索；原始对话可另行删除；资料源文件暂时保留。'],conversations:['短期与对话','每一段对话，都有来处。','只有你能查看自己的原始对话，不因家庭或设备共享而公开。','模型短期上下文使用最近 12 轮已完成对话（最多 32000 字符）；这里可管理完整记录。'],diaries:['每日记事','把日常，留在时间里。','按北京时间归档对话与当天的新偏好。','删除日记会同时删除对应原始对话轮次，避免再次回填；独立长期记忆会保留。']};
 const date = value => value ? new Date(value).toLocaleString('zh-CN',{hour12:false}) : '时间未知';
 const statusName = value => ({complete:'已完成',completed:'已完成',running:'回复中',failed:'失败',cancelled:'已停止',interrupted:'已中断'}[value] || value);
 const familyName = id => state.me?.families.find(f=>f.family_id===id)?.name || id || '个人空间';
@@ -36,7 +37,7 @@ async function chooseUser(){
   if(!$('users-dialog').open)$('users-dialog').showModal();
 }
 async function selectUser(id){
-  clearFact();state.epoch++;state.items=[];$('records').replaceChildren();$('job-list').replaceChildren();$('device-filter').value='';$('detail-dialog').close();
+  clearFact();todos.clear();state.epoch++;state.items=[];$('records').replaceChildren();$('job-list').replaceChildren();$('device-filter').value='';$('detail-dialog').close();
   state.me=await post('/api/identity/select',{user_id:id});state.page=1;renderProfile();$('users-dialog').close();$('query').value='';$('include-hidden').checked=false;
   await load();
 }
@@ -48,21 +49,24 @@ async function load(){
   if(!state.me)return;
   const epoch=++state.epoch,tab=state.tab;const type=types[tab];
   $('breadcrumb').textContent=type[0];$('title').textContent=type[1];$('subtitle').textContent=type[2];$('type-hint').textContent=type[3];$('alert').hidden=true;
-  $('add-record').hidden=!['builtin','longterm'].includes(tab);$('add-record').textContent=tab==='builtin'?'＋ 添加资料':'＋ 添加记忆';$('hidden-control').hidden=!['builtin','longterm'].includes(tab);$('imports').hidden=tab!=='builtin';$('query').disabled=tab==='diaries';
+  $('add-record').hidden=!['builtin','longterm','todos'].includes(tab);$('add-record').textContent=tab==='todos'?'＋ 创建待办':tab==='builtin'?'＋ 添加资料':'＋ 添加记忆';$('hidden-control').hidden=!['builtin','longterm'].includes(tab);$('imports').hidden=tab!=='builtin';$('query').disabled=tab==='diaries';
   $('add-record').disabled=Boolean(state.me.read_only);
+  $('todo-filters').hidden=tab!=='todos';
   $('fact-state-control').hidden=tab!=='longterm';$('fact-tasks').hidden=tab!=='longterm';
   if(tab==='longterm')$('type-hint').textContent='查看完整版本、更新、纠错和处理冲突。待确认或撤回的事实不作为有效记忆检索；删除清除全部事实版本，原始对话另行管理。';
   document.querySelectorAll('[data-tab]').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));
   $('records').innerHTML='<div class="empty">正在读取你的记录…</div>';
   const params=new URLSearchParams({family_id:$('family-filter').value,device_id:$('device-filter').value,page:state.page,q:$('query').value.trim()});
   if(tab==='longterm')params.set('fact_status',$('fact-state').value);
+  if(tab==='todos')todos.filters(params);
   let endpoint='/api/manage/'+(tab==='conversations'?'conversations':tab==='diaries'?'diaries':'memories');
+  if(tab==='todos')endpoint='/api/todos';
   if(['builtin','longterm'].includes(tab)){params.set('memory_type',tab);params.set('include_hidden',$('include-hidden').checked);}
   try{
     const data=await api(endpoint+'?'+params);if(epoch!==state.epoch)return;
     if(state.page>1&&!data.items.length){state.page--;return load();}
     state.items=data.items;$('result-count').textContent=data.total;$('scope-caption').textContent=' · '+state.me.name+'可见';
-    $('records').innerHTML=data.items.length?data.items.map(tab==='conversations'?conversationCard:tab==='diaries'?diaryCard:memoryCard).join(''):'<div class="empty">这里还没有记录。<br>试试切换家庭或设备，或添加一条属于你的记忆。</div>';
+    $('records').innerHTML=data.items.length?data.items.map(tab==='todos'?todos.card:tab==='conversations'?conversationCard:tab==='diaries'?diaryCard:memoryCard).join(''):'<div class="empty">这里还没有记录。<br>试试切换家庭或设备，或添加一条属于你的记忆。</div>';
     $('page-label').textContent=`第 ${state.page} / ${Math.max(1,Math.ceil(data.total/20))} 页`;$('previous').disabled=state.page===1;$('next').disabled=state.page*20>=data.total;
     if(tab==='builtin')await jobs();if(tab==='longterm')await factTasks();
   }catch(e){if(epoch===state.epoch){$('records').innerHTML='<div class="empty">读取失败，请重试。</div>';failure(e);}}
@@ -129,7 +133,8 @@ $('record-dialog').addEventListener('cancel',e=>{if(state.busy)e.preventDefault(
 $('record-family').onchange=recordDevices;
 $('switch-user').onclick=()=>chooseUser().catch(failure);$('relationships').onclick=()=>relationships().catch(failure);
 $('new-family').onclick=()=>relationshipForm('family');$('new-device').onclick=()=>relationshipForm('device');$('add-member').onclick=()=>relationshipForm('member').catch(failure);
-$('add-record').onclick=newRecord;$('refresh').onclick=load;
+const todos=createTodos({api,state,esc,date,tags,notify,failure,refresh:load});
+$('add-record').onclick=()=>state.tab==='todos'?todos.create():newRecord();$('refresh').onclick=load;
 $('family-filter').onchange=()=>{filterDevices();state.page=1;load();};$('fact-state').onchange=$('device-filter').onchange=$('include-hidden').onchange=()=>{state.page=1;load();};
 $('search-form').onsubmit=e=>{e.preventDefault();state.page=1;load();};$('previous').onclick=()=>{state.page--;load();};$('next').onclick=()=>{state.page++;load();};
 document.addEventListener('click',async e=>{

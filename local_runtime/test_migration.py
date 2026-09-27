@@ -259,3 +259,21 @@ def test_actual_vector_dimension_must_match_manifest(source, tmp_path):
             archive.addfile(entry,io.BytesIO(body))
     with pytest.raises(m.MigrationError,match='实际向量集合维度'):
         m.inspect_bundle(damaged,tmp_path)
+
+
+@pytest.mark.parametrize('version', [1, 2])
+def test_previous_bundle_versions_still_restore(source, tmp_path, version):
+    _, package, _, _ = source
+    compatible = tmp_path / f'compatible-v{version}.tar.gz'
+    with tarfile.open(package, 'r:gz') as original, tarfile.open(compatible, 'w:gz') as archive:
+        for entry in original.getmembers():
+            content = original.extractfile(entry).read()
+            if entry.name == 'manifest.json':
+                manifest = json.loads(content)
+                manifest['version'] = version
+                content = json.dumps(manifest).encode()
+                entry.size = len(content)
+            archive.addfile(entry, io.BytesIO(content))
+    stage = tmp_path / f'validate-v{version}'
+    stage.mkdir()
+    assert m.extract_bundle(compatible, stage)['version'] == version
