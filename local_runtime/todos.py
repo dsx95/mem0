@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import secrets
 import uuid
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Literal
@@ -79,6 +80,15 @@ class UpdateInput(BaseModel):
     changes: dict
 
 
+class RevisionInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    revision: int = Field(ge=1)
+
+
+class PurgeInput(RevisionInput):
+    title: str
+
+
 class Todos:
     def __init__(self, service):
         self.service, self.access = service, service.access
@@ -101,7 +111,16 @@ class Todos:
                 CREATE TABLE IF NOT EXISTS todo_requests (
                   user_id TEXT NOT NULL, request_id TEXT NOT NULL, fingerprint TEXT NOT NULL,
                   todo_id TEXT NOT NULL, PRIMARY KEY(user_id,request_id));
+                CREATE TABLE IF NOT EXISTS todo_delete_confirmations (
+                  id TEXT PRIMARY KEY, user_id TEXT NOT NULL, todo_id TEXT NOT NULL,
+                  revision INTEGER NOT NULL, session_id TEXT NOT NULL, turn_id TEXT NOT NULL,
+                  expires_at TEXT NOT NULL, consumed_at TEXT NOT NULL DEFAULT '',
+                  UNIQUE(user_id,todo_id,revision,turn_id));
             """)
+            columns = {r[1] for r in db.execute("PRAGMA table_info(todos)")}
+            for name in ("deleted_at", "deleted_by"):
+                if name not in columns:
+                    db.execute(f"ALTER TABLE todos ADD COLUMN {name} TEXT NOT NULL DEFAULT ''")
 
     @staticmethod
     def visibility_sql(user):
@@ -131,6 +150,8 @@ class Todos:
                     "completed_at",
                     "cancelled_at",
                     "revision",
+                    "deleted_at",
+                    "deleted_by",
                 )
             }
         )
@@ -138,9 +159,9 @@ class Todos:
         manage = row["owner_user_id"] == user or (row["visibility"] == "family" and owner and owner[0] == user)
         item.update(
             can_manage=bool(manage),
-            can_edit=bool(manage or row["assignee_user_id"] == user),
+            can_edit=bool(not row["deleted_at"] and (manage or row["assignee_user_id"] == user)),
             can_delete=bool(manage),
-            overdue=row["status"] in ACTIVE and bool(row["due_at"]) and row["due_at"] < now(),
+            overdue=not row["deleted_at"] and row["status"] in ACTIVE and bool(row["due_at"]) and row["due_at"] < now(),
         )
         source = json.loads(row["source"])
         item["source"] = source if row["owner_user_id"] == user else {"type": source.get("type", "manual")}
@@ -234,7 +255,9 @@ class Todos:
                 if replay:
                     if replay["fingerprint"] != fingerprint:
                         raise HTTPException(409, "此请求 ID 已用于不同内容，请重新提交")
-                    if not db.execute("SELECT 1 FROM todos WHERE id=?", (replay["todo_id"],)).fetchone():
+                    if not db.execute(
+                        "SELECT 1 FROM todos WHERE id=? AND deleted_at=''", (replay["todo_id"],)
+                    ).fetchone():
                         raise HTTPException(410, "该请求创建的待办已删除，不能通过重试恢复")
                     return {**self._item(db, self._record(db, user, replay["todo_id"]), user), "deduplicated": True}
             value, due = self.validate(db, user, body, creating=True)
@@ -244,7 +267,9 @@ class Todos:
                 (timestamp if value["status"] == "cancelled" else ""),
             )
             db.execute(
-                "INSERT INTO todos VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                """INSERT INTO todos(id,owner_user_id,family_id,device_id,visibility,assignee_user_id,
+                list_name,title,status,priority,due_at,created_at,updated_at,completed_at,cancelled_at,
+                revision,data,source) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     task_id,
                     user,
@@ -283,15 +308,30 @@ class Todos:
         with self.service.memory_lock, self.access.db() as db:
             db.execute("BEGIN IMMEDIATE")
             row = self._record(db, user, task_id)
+            if row["deleted_at"]:
+                raise HTTPException(409, "待办在回收站中，请先恢复")
             permissions = self._item(db, row, user)
             if not permissions["can_edit"] or (
                 not permissions["can_manage"] and set(changes) - {"status", "checklist"}
             ):
-                raise HTTPException(403, "负责人可更新进度；其他字段需创建者或家庭创建者修改")
+                raise HTTPException(403, "负责人可更新进度；其他字段需创建者或家庭管理员修改")
             if row["revision"] != revision:
                 raise HTTPException(409, "待办已被修改，请刷新详情后重试")
             old = json.loads(row["data"])
-            value, due = self.validate(db, row["owner_user_id"], {**old, **changes})
+            merged = {**old, **changes}
+            # Also recover pre-upgrade assignments whose member was removed by
+            # an older client. Explicitly choosing an invalid new assignee fails.
+            if (
+                row["visibility"] == "family"
+                and "assignee_user_id" not in changes
+                and old["assignee_user_id"]
+                and not db.execute(
+                    "SELECT 1 FROM app_members WHERE family_id=? AND user_id=?",
+                    (row["family_id"], old["assignee_user_id"]),
+                ).fetchone()
+            ):
+                merged["assignee_user_id"] = ""
+            value, due = self.validate(db, row["owner_user_id"], merged)
             diff = {k: {"before": old[k], "after": value[k]} for k in value if old[k] != value[k]}
             if not diff:
                 return permissions
@@ -317,15 +357,135 @@ class Todos:
     def delete(self, user, task_id, revision):
         with self.service.memory_lock, self.access.db() as db:
             db.execute("BEGIN IMMEDIATE")
+            return self._trash(db, user, task_id, revision)
+
+    def _trash(self, db, user, task_id, revision):
+        row = self._record(db, user, task_id)
+        self._manage(db, row, user, revision)
+        if row["deleted_at"]:
+            raise HTTPException(409, "待办已在回收站中")
+        stamp = now()
+        db.execute(
+            "UPDATE todos SET deleted_at=?,deleted_by=?,updated_at=?,revision=revision+1 WHERE id=?",
+            (stamp, user, stamp, task_id),
+        )
+        self.event(db, task_id, revision + 1, user, "trashed", {})
+        return {"deleted": True, "trashed": True, "id": task_id, "revision": revision + 1}
+
+    def _manage(self, db, row, user, revision):
+        if not self._item(db, row, user)["can_delete"]:
+            raise HTTPException(403, "只有创建者或家庭管理员可管理回收站")
+        if row["revision"] != revision:
+            raise HTTPException(409, "待办已被修改，请刷新后重试")
+
+    def restore(self, user, task_id, revision):
+        with self.service.memory_lock, self.access.db() as db:
+            db.execute("BEGIN IMMEDIATE")
             row = self._record(db, user, task_id)
-            if not self._item(db, row, user)["can_delete"]:
-                raise HTTPException(403, "只有创建者或家庭创建者可删除待办")
-            if row["revision"] != revision:
-                raise HTTPException(409, "待办已被修改，请刷新后重试")
+            self._manage(db, row, user, revision)
+            if not row["deleted_at"]:
+                raise HTTPException(409, "待办不在回收站中")
+            db.execute(
+                "UPDATE todos SET deleted_at='',deleted_by='',updated_at=?,revision=revision+1 WHERE id=?",
+                (now(), task_id),
+            )
+            self.event(db, task_id, revision + 1, user, "restored", {})
+            return self._item(db, self._record(db, user, task_id), user)
+
+    def purge(self, user, task_id, revision, title):
+        with self.service.memory_lock, self.access.db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = self._record(db, user, task_id)
+            self._manage(db, row, user, revision)
+            if not row["deleted_at"] or title != row["title"]:
+                raise HTTPException(422, "只能彻底删除回收站中的待办，请输入完整标题确认")
+            db.execute("DELETE FROM todo_delete_confirmations WHERE todo_id=?", (task_id,))
             db.execute("DELETE FROM todo_events WHERE todo_id=?", (task_id,))
             db.execute("DELETE FROM todos WHERE id=?", (task_id,))
-            # Retain only the request hash/ID, never text, to reject replay after erasure.
-        return {"deleted": True, "id": task_id}
+        return {"deleted": True, "purged": True, "id": task_id}
+
+    def propose_delete(self, user, task_id, revision, session_id, turn_id):
+        with self.service.memory_lock, self.access.db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = self._record(db, user, task_id)
+            self._manage(db, row, user, revision)
+            if row["deleted_at"]:
+                raise HTTPException(409, "待办已在回收站中")
+            db.execute("DELETE FROM todo_delete_confirmations WHERE expires_at<?", (now(),))
+            expiry = (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat(timespec="microseconds")
+            db.execute(
+                "INSERT OR IGNORE INTO todo_delete_confirmations VALUES (?,?,?,?,?,?,?,'')",
+                (secrets.token_urlsafe(24), user, task_id, revision, session_id, turn_id, expiry),
+            )
+            request = db.execute(
+                "SELECT * FROM todo_delete_confirmations WHERE user_id=? AND todo_id=? AND revision=? AND turn_id=?",
+                (user, task_id, revision, turn_id),
+            ).fetchone()
+            return {
+                "requires_confirmation": True,
+                "confirmation_id": request["id"],
+                "expires_at": request["expires_at"],
+                "todo": self._item(db, row, user),
+                "message": "尚未删除。请在确认卡上点击移入回收站；纯文字回复不会执行删除。",
+            }
+
+    def confirm_delete(self, user, confirmation_id):
+        with self.service.memory_lock, self.access.db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            request = db.execute(
+                "SELECT * FROM todo_delete_confirmations WHERE id=? AND user_id=?", (confirmation_id, user)
+            ).fetchone()
+            if not request:
+                raise HTTPException(404, "确认请求不存在或无权访问")
+            if request["expires_at"] < now():
+                raise HTTPException(410, "确认已过期，请重新发起删除")
+            if not db.execute(
+                """SELECT 1 FROM chat_turns t JOIN chat_sessions s ON s.id=t.session_id
+                WHERE t.id=? AND s.id=? AND s.user_id=?""",
+                (request["turn_id"], request["session_id"], user),
+            ).fetchone():
+                raise HTTPException(410, "原始对话已删除，确认已失效")
+            row = self._record(db, user, request["todo_id"])
+            if request["consumed_at"]:
+                return {"already_confirmed": True, "id": row["id"], "trashed": bool(row["deleted_at"])}
+            result = self._trash(db, user, row["id"], request["revision"])
+            db.execute("UPDATE todo_delete_confirmations SET consumed_at=? WHERE id=?", (now(), confirmation_id))
+            return result
+
+    def cancel_delete(self, user, confirmation_id):
+        with self.service.memory_lock, self.access.db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            request = db.execute(
+                "SELECT consumed_at FROM todo_delete_confirmations WHERE id=? AND user_id=?", (confirmation_id, user)
+            ).fetchone()
+            if not request:
+                raise HTTPException(404, "确认已取消或失效")
+            if request["consumed_at"]:
+                raise HTTPException(409, "此操作已确认，不能取消；如需撤销删除，请到回收站恢复")
+            db.execute(
+                "DELETE FROM todo_delete_confirmations WHERE id=? AND user_id=? AND consumed_at=''",
+                (confirmation_id, user),
+            )
+        return {"cancelled": True}
+
+    def deletion_status(self, user, confirmation_id):
+        with self.access.db() as db:
+            request = db.execute(
+                "SELECT * FROM todo_delete_confirmations WHERE id=? AND user_id=?", (confirmation_id, user)
+            ).fetchone()
+            if not request:
+                raise HTTPException(404, "确认已取消或失效")
+            row = self._record(db, user, request["todo_id"])
+            state = (
+                "confirmed"
+                if request["consumed_at"]
+                else "expired"
+                if request["expires_at"] < now()
+                else "stale"
+                if row["revision"] != request["revision"]
+                else "pending"
+            )
+            return {"state": state, "trashed": bool(row["deleted_at"])}
 
     def list(
         self,
@@ -342,6 +502,7 @@ class Todos:
         page=1,
         page_size=20,
         timezone_name="Asia/Shanghai",
+        trashed=False,
     ):
         if status not in {"all", "open", *STATUSES} or period not in {
             "all",
@@ -355,6 +516,7 @@ class Todos:
             raise HTTPException(422, "分页或搜索条件无效")
         tz = zone(timezone_name)
         where, args = self.visibility_sql(user)
+        where += " AND deleted_at<>''" if trashed else " AND deleted_at=''"
         for key, value in (
             ("family_id", family_id),
             ("device_id", device_id),
@@ -422,6 +584,7 @@ def install(app, service):
         page: int = Query(1, ge=1),
         page_size: int = Query(20, ge=1, le=100),
         timezone: str = "Asia/Shanghai",
+        trashed: bool = False,
     ):
         return service.todos.list(
             viewer(),
@@ -436,6 +599,7 @@ def install(app, service):
             page=page,
             page_size=page_size,
             timezone_name=timezone,
+            trashed=trashed,
         )
 
     @app.post("/api/todos", status_code=201)
@@ -453,3 +617,23 @@ def install(app, service):
     @app.delete("/api/todos/{task_id}")
     def delete(task_id: str, revision: int = Query(..., ge=1)):
         return service.todos.delete(viewer(), task_id, revision)
+
+    @app.post("/api/todos/{task_id}/restore")
+    def restore(task_id: str, body: RevisionInput):
+        return service.todos.restore(viewer(), task_id, body.revision)
+
+    @app.post("/api/todos/{task_id}/purge")
+    def purge(task_id: str, body: PurgeInput):
+        return service.todos.purge(viewer(), task_id, body.revision, body.title)
+
+    @app.post("/api/todo-delete-confirmations/{confirmation_id}/confirm")
+    def confirm(confirmation_id: str):
+        return service.todos.confirm_delete(viewer(), confirmation_id)
+
+    @app.delete("/api/todo-delete-confirmations/{confirmation_id}")
+    def cancel(confirmation_id: str):
+        return service.todos.cancel_delete(viewer(), confirmation_id)
+
+    @app.get("/api/todo-delete-confirmations/{confirmation_id}")
+    def confirmation_status(confirmation_id: str):
+        return service.todos.deletion_status(viewer(), confirmation_id)

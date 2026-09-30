@@ -157,13 +157,14 @@ class Access:
                 db.execute("INSERT INTO app_families VALUES (?,?,?)", (family, name.strip() or family, user))
                 db.execute("INSERT INTO app_members VALUES (?,?)", (family, user))
             except sqlite3.IntegrityError:
-                raise HTTPException(409, "家庭已存在；请让家庭创建者添加成员") from None
+                raise HTTPException(409, "家庭已存在；请让家庭管理员添加成员") from None
 
     def add_member(self, user, family, member):
         with self.db() as db:
+            db.execute("BEGIN IMMEDIATE")
             row = db.execute("SELECT owner_user_id FROM app_families WHERE family_id=?", (family,)).fetchone()
             if not row or row[0] != user:
-                raise HTTPException(403, "只有家庭创建者可以添加成员")
+                raise HTTPException(403, "只有家庭管理员可以添加成员")
             if not db.execute("SELECT 1 FROM app_users WHERE user_id=?", (member,)).fetchone():
                 raise HTTPException(404, "请先创建该用户")
             db.execute("INSERT OR IGNORE INTO app_members VALUES (?,?)", (family, member))
@@ -175,7 +176,7 @@ class Access:
         if not valid_id(device):
             raise HTTPException(422, "设备 ID 格式无效")
         if family and not any(f["family_id"] == family and f["owner_user_id"] == user for f in profile["families"]):
-            raise HTTPException(403, "只有家庭创建者可以添加家庭设备")
+            raise HTTPException(403, "只有家庭管理员可以添加家庭设备")
         with self.db() as db:
             try:
                 db.execute("INSERT INTO app_devices VALUES (?,?,?,?)", (device, name.strip() or device, family, user))

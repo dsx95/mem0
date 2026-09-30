@@ -16,7 +16,9 @@
 | `GET /api/identity/me` | 当前用户、所属家庭/成员、可用设备 |
 | `POST /api/identity/users` | 创建本地用户：`user_id, name` |
 | `POST /api/identity/families` | 当前用户创建家庭：`family_id, name` |
-| `POST /api/identity/families/{family_id}/members` | 家庭创建者添加已有用户：`user_id` |
+| `POST /api/identity/families/{family_id}/members` | 家庭管理员添加已有用户：`user_id` |
+| `POST /api/identity/families/{family_id}/leave` | 本人退出，普通成员传 `{}`；管理员传 `{"successor_user_id":"bob"}`，接任者须为其他现有成员 |
+| `DELETE /api/identity/families/{family_id}/members/{user_id}` | 管理员移除其他成员；成员也可移除自己，管理员本人须走转交退出接口 |
 | `POST /api/identity/devices` | 登记设备：`device_id, name, family_id`；family_id 空表示个人设备 |
 | `GET /api/manage/memories` | `memory_type=builtin/longterm/all, family_id, device_id, q, page, page_size, include_hidden, fact_status=all/active/disputed/retracted` |
 | `POST /api/manage/notes` | 手动添加：`text, family_id, device_id, scope=personal/family, memory_type=builtin/longterm；长期事实增加 subject, attribute, occurred_at` |
@@ -56,7 +58,7 @@
 - 短期上下文是当前会话最近 12 轮完成对话，完整历史与日记始终只属于本人。
 - 日记按 `(user_id, family_id, 北京日期)` 跨设备汇总。日记详情/删除可附加 `device_id` 精确筛选；
   这里省略参数表示所有设备，显式 `device_id=` 表示未标记设备。设备筛选时只展示对应原始条目，不展示全设备摘要。
-- 私人记录仅本人可删除；共享记录仅创建者或家庭创建者可删除；公共资料只能对自己隐藏。
+- 私人记录仅本人可删除；共享记录仅创建者或家庭管理员可删除；公共资料只能对自己隐藏。
 - 删除日记会同步删原始轮次，避免重启回填；删除对话不会连带删除独立长期事实。
 - 删除长期记忆会删除向量、修改历史、工具追踪与日记新增记忆副本，失效相关摘要；原始问答、资料源文件、解析缓存和备份保留。
 - 删除与活跃回复冲突时返回 409，等待/停止回复后重试；正在导入同份资料时不能删除其分片。
@@ -70,4 +72,6 @@ CLI 和原生 Mem0 不经过这层网页授权，只能作为受信任的运维�
 `GET /api/manage/records/{id}` 可查看有权限的隐藏记录和历史；正常召回仍过滤隐藏记录。
 删除长期事实同时清理全部版本和候选；Qdrant 清理失败会持久重试，删除标记即时阻止读取。
 
-待办清单使用同一身份与家庭/设备权限入口，详见 [待办接口](TODOS.md)。共享事项负责人只能更新状态和子任务，创建者或家庭创建者可管理和删除。
+待办清单使用同一身份与家庭/设备权限入口，详见 [待办接口](TODOS.md)。共享事项负责人只能更新状态和子任务，创建者或家庭管理员可管理和删除。
+
+退出原子撤销成员关系，清空其共享待办指派（含回收站）、记录审计并撤销旧删除确认。已有私人数据不删除；家庭设备保留归家庭。管理员退出必须转交，最后一位成员暂不能退出。家庭仍有聊天回复时返回 409。退出后不能继续旧家庭会话；原始对话和备份不会自动擦除。

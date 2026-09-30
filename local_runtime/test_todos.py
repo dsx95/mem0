@@ -134,6 +134,13 @@ def test_idempotency_replay_concurrency_and_delete_tombstone(console):
         client.post("/api/todos", headers=HEADERS, json={"title": "不同内容", "request_id": "same"}).status_code == 409
     )
     assert client.delete("/api/todos/" + item["id"] + "?revision=1", headers=HEADERS).status_code == 200
+    assert client.get("/api/todos/" + item["id"]).json()["deleted_at"]
+    assert (
+        client.post(
+            "/api/todos/" + item["id"] + "/purge", headers=HEADERS, json={"revision": 2, "title": item["title"]}
+        ).status_code
+        == 200
+    )
     assert client.get("/api/todos/" + item["id"]).status_code == 404
     with pytest.raises(Exception) as replay:
         service.todos.create("chat_default", body, request_id="same")
@@ -157,7 +164,7 @@ def test_concurrent_versions_scope_immutable_and_no_resurrection(console):
     assert update(client, item, visibility="family").status_code == 422
     assert client.delete("/api/todos/" + item["id"] + "?revision=1", headers=HEADERS).status_code == 409
     assert client.delete("/api/todos/" + item["id"] + "?revision=2", headers=HEADERS).status_code == 200
-    assert update(client, item, title="复活").status_code == 404
+    assert update(client, item, title="复活").status_code == 409
 
 
 def test_exact_filters_pagination_date_only_and_timezone(console):
@@ -282,7 +289,7 @@ def test_todos_survive_migration_and_records_are_not_overwritten(console, tmp_pa
     update(client, item, status="in_progress")
     root = service.settings.data_dir.parent
     package, manifest = m.export_bundle(root, settings(root), client=service.memory.client, materials=service.root)
-    assert manifest["version"] == 3 and manifest["counts"]["todos"] == 1 and manifest["counts"]["todo_events"] == 2
+    assert manifest["version"] == 4 and manifest["counts"]["todos"] == 1 and manifest["counts"]["todo_events"] == 2
     target = tmp_path / "restored"
     m.restore_bundle(package, settings(target), target)
     with sqlite3.connect(target / "data/dashboard/chat.sqlite") as db:

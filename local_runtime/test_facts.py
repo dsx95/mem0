@@ -369,7 +369,7 @@ def test_pending_fact_and_versions_survive_logical_migration(console, tmp_path):
     root = service.settings.data_dir.parent
     config = migration_settings(root)
     package, manifest = m.export_bundle(root, config, client=service.memory.client, materials=service.root)
-    assert manifest["version"] == 3 and manifest["counts"]["fact_versions"] == 27
+    assert manifest["version"] == 4 and manifest["counts"]["fact_versions"] == 27
     target = tmp_path / "restored-facts"
     m.restore_bundle(package, migration_settings(target), target)
     with sqlite3.connect(Path(target, "data/dashboard/chat.sqlite")) as db:

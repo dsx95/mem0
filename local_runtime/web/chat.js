@@ -85,11 +85,41 @@ async function sessions(){
 function toolCard(event){
   const details=document.createElement('details'); details.className='tool-card '+event.status; details.dataset.call=event.id;
   const action=event.arguments?.action, remember=action==='remember',todo=event.name==='todo';
-  const name=todo?({list:'查询待办清单',get:'查看待办详情',create:'创建待办',update:'更新待办',delete:'删除待办'}[action]||'管理待办'):action==='diary'?'查看每日记事':remember?(event.result?.scope==='family'?'保存家庭共享记忆':'保存一条记忆'):event.arguments?.scope==='library'?'检索资料原文':'查找相关记忆';
+  const name=todo?({list:'查询待办清单',get:'查看待办详情',create:'创建待办',update:'更新待办',delete:'申请删除待办'}[action]||'管理待办'):action==='diary'?'查看每日记事':remember?(event.result?.scope==='family'?'保存家庭共享记忆':'保存一条记忆'):event.arguments?.scope==='library'?'检索资料原文':'查找相关记忆';
   const count=event.result?.memories?.length;
-  const caption=event.status==='running'?'进行中':event.status==='error'?'未完成':todo?(action==='list'?`共 ${event.result?.total??0} 项`:'已完成操作'):action==='diary'?`${event.result?.turn_count ?? 0} 轮对话`:remember?'已保存':`找到 ${count ?? 0} 条`;
+  const caption=event.status==='running'?'进行中':event.status==='error'?'未完成':todo?(action==='list'?`共 ${event.result?.total??0} 项`:event.result?.requires_confirmation?'等待用户确认':'已完成操作'):action==='diary'?`${event.result?.turn_count ?? 0} 轮对话`:remember?'已保存':`找到 ${count ?? 0} 条`;
   const ranking=event.result?.rerank?.status,rankingCaption=ranking==='applied'?' · 已重排':ranking==='fallback'?' · 重排失败，使用原排序':'';
   details.innerHTML=`<summary>${icon(remember?'spark':'search')}<span>${name}</span><span class="tool-caption">${escape(caption+rankingCaption)}</span></summary><div class="tool-data"><label>调用 ${escape(event.name || 'mem0')}</label><pre>${escape(JSON.stringify(event.arguments,null,2))}</pre>${event.result?'<label>返回结果</label><pre>'+escape(JSON.stringify(event.result,null,2))+'</pre>':''}</div>`;
+  if(todo&&event.result?.requires_confirmation){
+    details.open=true;details.querySelector('.tool-data').hidden=true;
+    const box=document.createElement('div');box.className='todo-confirmation';
+    const title=document.createElement('strong');title.textContent='是否将“'+event.result.todo.title+'”移入回收站？';
+    const meta=document.createElement('p');meta.textContent='清单：'+event.result.todo.list_name+' · '+(event.result.todo.visibility==='family'?'家庭共享：'+event.result.todo.family_id:'仅自己')+' · 截止：'+(event.result.todo.due_date||event.result.todo.due_at||'未设置');
+    const note=document.createElement('p');note.textContent='尚未删除。确认有效期 10 分钟；任务变更后需重新申请。移入回收站后可以恢复。';
+    const confirm=document.createElement('button');confirm.textContent='确认移入回收站';
+    const cancel=document.createElement('button');cancel.textContent='取消';
+    const user=state.user,identity=event.result.confirmation_id;
+    async function decide(accepted){
+      if(user!==state.user){error('用户已切换，请重新打开对话');return;}
+      if(state.busy){error('请等待本轮回复完成后再操作');return;}
+      confirm.disabled=cancel.disabled=true;
+      try{
+        const response=await fetch('/api/todo-delete-confirmations/'+encodeURIComponent(identity)+(accepted?'/confirm':''),{method:accepted?'POST':'DELETE',headers:{'X-Memory-Client':'dashboard','X-Memory-User':user}});
+        const data=await response.json();if(!response.ok)throw new Error(typeof data.detail==='string'?data.detail:'操作失败');
+        if(user!==state.user)return;
+        note.textContent=!accepted?'已取消，本次确认失效。':data.trashed?'已移入回收站，可在待办管理页恢复。':'此确认已处理；待办当前不在回收站中。';
+        confirm.hidden=cancel.hidden=true;details.querySelector('.tool-caption').textContent=accepted?'确认已处理':'已取消';
+      }catch(e){if(user===state.user){note.textContent=e.message;error(e.message);}confirm.disabled=cancel.disabled=false;}
+    }
+    confirm.onclick=()=>decide(true);cancel.onclick=()=>decide(false);box.append(title,meta,note,confirm,cancel);details.append(box);
+    confirm.disabled=cancel.disabled=true;
+    fetch('/api/todo-delete-confirmations/'+encodeURIComponent(identity),{headers:{'X-Memory-User':user}}).then(async response=>{
+      const data=await response.json();if(user!==state.user)return;
+      if(response.ok&&data.state==='pending'){confirm.disabled=cancel.disabled=false;return;}
+      note.textContent=response.ok?(data.state==='confirmed'?(data.trashed?'已移入回收站，可在待办管理页恢复。':'此确认已处理；待办当前不在回收站中。'):data.state==='expired'?'确认已过期，请重新发起删除。':'待办已变更，请重新核对后发起删除。'):'确认已取消或失效。';
+      confirm.hidden=cancel.hidden=true;details.querySelector('.tool-caption').textContent=response.ok&&data.state==='confirmed'?'确认已处理':'确认已失效';
+    }).catch(()=>{note.textContent='暂时无法读取确认状态，请刷新重试。';});
+  }
   return details;
 }
 function renderGrounding(el, grounding={}){
@@ -194,7 +224,7 @@ async function send(text){
         if(event.type==='status')$('reply-status').lastElementChild.textContent=event.text;
         if(event.type==='delta'){answer+=event.text;activeTurn.querySelector('.answer').innerHTML=markdown(answer);scroll();}
         if(event.type==='tool_start' || event.type==='tool_end'){
-          const parent=activeTurn.querySelector('.tool-events');const previous=[...parent.children].find(el=>el.dataset.call===event.event.id);const next=toolCard(event.event);if(previous){next.open=previous.open;previous.replaceWith(next);}else parent.append(next);
+          const parent=activeTurn.querySelector('.tool-events');const previous=[...parent.children].find(el=>el.dataset.call===event.event.id);const next=toolCard(event.event);if(previous){next.open=previous.open||Boolean(event.event.result?.requires_confirmation);previous.replaceWith(next);}else parent.append(next);
           $('reply-status').lastElementChild.textContent=event.type==='tool_start'?(event.event.arguments?.action==='remember'?'正在保存记忆…':event.event.arguments?.action==='diary'?'正在读取日记…':'正在查找记忆…'):'正在组织回答…';
           if(event.type==='tool_end' && event.event.result?.saved)memories().catch(()=>{});scroll();
         }

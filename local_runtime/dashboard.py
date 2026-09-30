@@ -387,6 +387,8 @@ def create_app(settings=None, root=DEFAULT_ROOT, memory_factory=create_memory, m
     install_chat(app, service)
     from .todos import install as install_todos
     install_todos(app, service)
+    from .membership import install as install_membership
+    install_membership(app, service)
     from .management import install as install_management
     install_management(app, service)
     from .migration_web import install as install_migration

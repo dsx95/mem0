@@ -20,7 +20,7 @@ import uuid
 import portalocker
 
 FORMAT = "knowin-memory-migration"
-VERSION = 3
+VERSION = 4
 MAX_BYTES = 50 * 1024**3
 MAX_FILES = 100000
 ROOT = Path(__file__).resolve().parent.parent
@@ -144,6 +144,8 @@ def backup_sqlite(source, dest):
         new.execute("PRAGMA journal_mode=DELETE")
         if new.execute("SELECT 1 FROM sqlite_master WHERE name='app_logins'").fetchone():
             new.execute("DELETE FROM app_logins")
+            if new.execute("SELECT 1 FROM sqlite_master WHERE name='todo_delete_confirmations'").fetchone():
+                new.execute("DELETE FROM todo_delete_confirmations")
             new.commit()
             new.execute("VACUUM")
     check_sqlite(dest)
@@ -315,7 +317,7 @@ def _extract_bundle(package, stage):
             with archive.extractfile(member) as src, path.open("xb") as out:
                 shutil.copyfileobj(src, out, length=1024 * 1024)
     manifest = json.loads((stage / "manifest.json").read_text())
-    if manifest.get("format") != FORMAT or manifest.get("version") not in {1, 2, VERSION}:
+    if manifest.get("format") != FORMAT or manifest.get("version") not in {1, 2, 3, VERSION}:
         raise MigrationError("迁移包格式/版本不支持")
     files = manifest.get("files", {})
     if set(files) | {"manifest.json"} != seen or "vectors.jsonl" not in files:
@@ -434,6 +436,8 @@ def prepare_restore(stage, manifest, root, keep_local_identities):
         preserve_identities(root / "data/dashboard/chat.sqlite", chat)
     with closing(sqlite3.connect(chat)) as db, db:
         db.execute("DELETE FROM app_logins")
+        if db.execute("SELECT 1 FROM sqlite_master WHERE name='todo_delete_confirmations'").fetchone():
+            db.execute("DELETE FROM todo_delete_confirmations")
         # Only pre-identity packages need migration on the first new-version startup.
         if not db.execute("SELECT 1 FROM app_users LIMIT 1").fetchone() or keep_local_identities:
             db.execute("DELETE FROM app_migrations WHERE name='identities-v1'")

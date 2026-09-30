@@ -30,7 +30,7 @@ TOOL = {
     "type": "function",
     "function": {
         "name": "todo",
-        "description": "管理当前用户/家庭的结构化待办清单；查询走数据库分页，不依赖向量检索。支持创建、修改、完成、取消、重开和删除。没有主动通知能力。",
+        "description": "管理当前用户/家庭的结构化待办清单。delete 仅申请删除确认，不会删除；用户在网页确认后才移入回收站。没有主动通知能力。",
         "parameters": {
             "type": "object",
             "additionalProperties": False,
@@ -71,6 +71,10 @@ list 默认查询当前身份在当前家庭范围的私人和家庭共享待办
 要改期时清空原 due_date 或 due_at 中不再使用的字段；取消用 status=cancelled，完成用 done，重新打开用 pending。不要无意创建重复项。
 此版本支持截止日期和逾期展示，没有主动提醒/推送。用户要求提醒时说明能保存待办但暂不能主动通知，不得声称已设置提醒。
 工具返回 changed=true 或 deleted=true 后才能声称操作完成；工具返回错误时说明未完成并据提示修正或让用户刷新。"""
+
+PROMPT += """\ndelete 只生成有效期十分钟的删除确认卡，不能执行删除。返回 requires_confirmation=true 时明确告诉用户尚未删除，请点击卡片确认。
+否定、引用、假设中的删除表达不能申请删除。用户仅回复确认，也不能绕过网页确认；你没有执行确认或彻底删除的工具。
+删除进入回收站，用户可在管理页恢复。彻底删除只在回收站由用户操作，不接受模型调用。"""
 
 
 def instruction():
@@ -146,7 +150,8 @@ def execute(service, session, args):
             raise HTTPException(422, "请先查询待办，使用返回的 revision")
         if action == "update":
             return {"changed": True, "todo": model_item(service.todos.update(user, record["id"], revision, data))}
-        return service.todos.delete(user, record["id"], revision)
+        result = service.todos.propose_delete(user, record["id"], revision, session["id"], session["_turn_id"])
+        return {**result, "todo": model_item(result["todo"])}
     except HTTPException as exc:
         return {"error": exc.detail, "status_code": exc.status_code}
     except (TypeError, ValueError, KeyError):

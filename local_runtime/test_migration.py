@@ -261,7 +261,7 @@ def test_actual_vector_dimension_must_match_manifest(source, tmp_path):
         m.inspect_bundle(damaged,tmp_path)
 
 
-@pytest.mark.parametrize('version', [1, 2])
+@pytest.mark.parametrize('version', [1, 2, 3])
 def test_previous_bundle_versions_still_restore(source, tmp_path, version):
     _, package, _, _ = source
     compatible = tmp_path / f'compatible-v{version}.tar.gz'

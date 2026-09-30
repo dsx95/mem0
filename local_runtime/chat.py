@@ -298,6 +298,7 @@ class Chat:
         with self.lock:
             if self.closing:
                 raise HTTPException(503, "服务正在关闭")
+            self.dashboard.access.require_context(session["user_id"], session["family_id"], session.get("device_id", ""))
             if session_id in self.runs:
                 raise HTTPException(409, "当前对话仍在回复，请稍候")
             if len(self.runs) >= 3:

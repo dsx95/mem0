@@ -1,9 +1,10 @@
+import {familyControls,installDepartures} from './departures.js';
 import {createTodos} from './todos.js';
 import {factNames,syncNames,showFact,clearFact} from './facts.js';
 const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const state = {me:null, users:[], tab:new URLSearchParams(location.search).get('tab')==='todos'?'todos':'longterm', page:1, epoch:0, relationship:'family', items:[], busy:false};
-const types = {todos:['待办清单','把计划，一件件完成。','管理个人与家庭待办，安排时间、负责人和每一步行动。','今天 / 未来 7 天按北京时间筛选。完成、取消保留历史；删除待办不会删除原始聊天和已有备份。'],builtin:['内置资料','让资料，成为随时可用的知识。','说明书、参考资料，以及家庭和设备的预置知识。','共享资料可以对自己隐藏；有管理权限的记录可以删除。'],longterm:['长期记忆','值得记住的，都在这里。','查看你的偏好、约定与家庭共享记忆，决定留下什么。','删除长期记忆后，不会再被检索；原始对话可另行删除；资料源文件暂时保留。'],conversations:['短期与对话','每一段对话，都有来处。','只有你能查看自己的原始对话，不因家庭或设备共享而公开。','模型短期上下文使用最近 12 轮已完成对话（最多 32000 字符）；这里可管理完整记录。'],diaries:['每日记事','把日常，留在时间里。','按北京时间归档对话与当天的新偏好。','删除日记会同时删除对应原始对话轮次，避免再次回填；独立长期记忆会保留。']};
+const types = {todos:['待办清单','把计划，一件件完成。','管理个人与家庭待办，安排时间、负责人和每一步行动。','今天 / 未来 7 天按北京时间筛选。完成、取消保留历史；删除先移入回收站，可恢复；原始聊天和备份单独管理。'],builtin:['内置资料','让资料，成为随时可用的知识。','说明书、参考资料，以及家庭和设备的预置知识。','共享资料可以对自己隐藏；有管理权限的记录可以删除。'],longterm:['长期记忆','值得记住的，都在这里。','查看你的偏好、约定与家庭共享记忆，决定留下什么。','删除长期记忆后，不会再被检索；原始对话可另行删除；资料源文件暂时保留。'],conversations:['短期与对话','每一段对话，都有来处。','只有你能查看自己的原始对话，不因家庭或设备共享而公开。','模型短期上下文使用最近 12 轮已完成对话（最多 32000 字符）；这里可管理完整记录。'],diaries:['每日记事','把日常，留在时间里。','按北京时间归档对话与当天的新偏好。','删除日记会同时删除对应原始对话轮次，避免再次回填；独立长期记忆会保留。']};
 const date = value => value ? new Date(value).toLocaleString('zh-CN',{hour12:false}) : '时间未知';
 const statusName = value => ({complete:'已完成',completed:'已完成',running:'回复中',failed:'失败',cancelled:'已停止',interrupted:'已中断'}[value] || value);
 const familyName = id => state.me?.families.find(f=>f.family_id===id)?.name || id || '个人空间';
@@ -101,7 +102,7 @@ async function diary(index){
 }
 async function relationships(){
   state.me=await api('/api/identity/me');
-  $('relationship-list').innerHTML=state.me.families.map(f=>`<div class="relationship"><strong>${esc(f.name)}</strong> · ${esc(f.family_id)}${f.owner_user_id===state.me.user_id?' · 我是创建者':''}<small>成员：${f.members.map(u=>esc(u.name)).join('、')}</small><small>设备：${state.me.devices.filter(d=>d.family_id===f.family_id).map(d=>esc(d.name)+' ('+esc(d.device_id)+')').join('、')||'暂无'}</small></div>`).join('')+`<div class="relationship"><strong>个人设备</strong><small>${state.me.devices.filter(d=>!d.family_id).map(d=>esc(d.name)+' ('+esc(d.device_id)+')').join('、')||'暂无个人设备'}</small></div>`;
+  $('relationship-list').innerHTML=state.me.families.map(f=>`<div class="relationship"><strong>${esc(f.name)}</strong> · ${esc(f.family_id)}${f.owner_user_id===state.me.user_id?' · 我是管理员':''}<small>成员：${f.members.map(u=>esc(u.name)).join('、')}</small><small>设备：${state.me.devices.filter(d=>d.family_id===f.family_id).map(d=>esc(d.name)+' ('+esc(d.device_id)+')').join('、')||'暂无'}</small>${familyControls(f,state.me.user_id,esc)}</div>`).join('')+`<div class="relationship"><strong>个人设备</strong><small>${state.me.devices.filter(d=>!d.family_id).map(d=>esc(d.name)+' ('+esc(d.device_id)+')').join('、')||'暂无个人设备'}</small></div>`;
   $('relationship-form').hidden=true;if(!$('relationships-dialog').open)$('relationships-dialog').showModal();
 }
 async function relationshipForm(kind){
@@ -134,6 +135,7 @@ $('record-family').onchange=recordDevices;
 $('switch-user').onclick=()=>chooseUser().catch(failure);$('relationships').onclick=()=>relationships().catch(failure);
 $('new-family').onclick=()=>relationshipForm('family');$('new-device').onclick=()=>relationshipForm('device');$('add-member').onclick=()=>relationshipForm('member').catch(failure);
 const todos=createTodos({api,state,esc,date,tags,notify,failure,refresh:load});
+installDepartures({api,state,failure,notify,after:async()=>{clearFact();todos.clear();$('detail-dialog').close();state.epoch++;state.page=1;state.items=[];$('records').replaceChildren();await relationships();renderProfile();await load();}});
 $('add-record').onclick=()=>state.tab==='todos'?todos.create():newRecord();$('refresh').onclick=load;
 $('family-filter').onchange=()=>{filterDevices();state.page=1;load();};$('fact-state').onchange=$('device-filter').onchange=$('include-hidden').onchange=()=>{state.page=1;load();};
 $('search-form').onsubmit=e=>{e.preventDefault();state.page=1;load();};$('previous').onclick=()=>{state.page--;load();};$('next').onclick=()=>{state.page++;load();};
