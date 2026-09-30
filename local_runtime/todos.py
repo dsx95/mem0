@@ -60,12 +60,30 @@ class TodoData(BaseModel):
     device_id: str = Field(default="", max_length=64)
     visibility: Literal["personal", "family"] = "personal"
     assignee_user_id: str = Field(default="", max_length=64)
+    participant_user_ids: list[str] = Field(
+        default_factory=list,
+        max_length=30,
+        description="需要协作的现有家庭成员 ID；仅记录协作关系，不授予编辑权限。私人待办只能包含本人。",
+    )
     start_at: str = Field(default="", max_length=40)
     due_at: str = Field(default="", max_length=40)
     due_date: str = Field(default="", max_length=10)
     timezone: str = Field(default="Asia/Shanghai", min_length=1, max_length=80)
     location: str = Field(default="", max_length=240)
     estimated_minutes: int | None = Field(default=None, ge=1, le=10080)
+    actual_minutes: int | None = Field(default=None, ge=0, le=525600)
+    required_resources: str = Field(
+        default="", max_length=2000, description="需要的物品、资料或外部联系人说明，不改变访问权限。"
+    )
+    completion_criteria: str = Field(default="", max_length=2000)
+    blocked_reason: str = Field(default="", max_length=2000)
+    completion_note: str = Field(default="", max_length=2000)
+    reminder_enabled: bool = Field(default=False, description="保存提醒计划开关；当前未接入提醒投递服务。")
+    reminder_at: str = Field(default="", max_length=40, description="计划提醒时刻，必须带时区；不是截止时间。")
+    reminder_expires_at: str = Field(
+        default="", max_length=40, description="提醒失效时刻，须晚于 reminder_at；启用提醒计划时必填。"
+    )
+    reminder_note: str = Field(default="", max_length=500)
     tags: list[str] = Field(default_factory=list, max_length=10)
     checklist: list[Item] = Field(default_factory=list, max_length=50)
 
@@ -118,9 +136,20 @@ class Todos:
                   UNIQUE(user_id,todo_id,revision,turn_id));
             """)
             columns = {r[1] for r in db.execute("PRAGMA table_info(todos)")}
-            for name in ("deleted_at", "deleted_by"):
+            for name in ("deleted_at", "deleted_by", "actual_started_at", "completed_by"):
                 if name not in columns:
                     db.execute(f"ALTER TABLE todos ADD COLUMN {name} TEXT NOT NULL DEFAULT ''")
+            # Add defaults to old JSON records without changing IDs, revisions,
+            # historical timestamps or inventing past execution/completion data.
+            defaults = TodoData(title="migration").model_dump()
+            defaults.pop("title")
+            for row in db.execute("SELECT id,data FROM todos").fetchall():
+                old = json.loads(row["data"])
+                if set(defaults) - old.keys():
+                    db.execute(
+                        "UPDATE todos SET data=? WHERE id=?",
+                        (json.dumps({**defaults, **old}, ensure_ascii=False), row["id"]),
+                    )
 
     @staticmethod
     def visibility_sql(user):
@@ -152,6 +181,8 @@ class Todos:
                     "revision",
                     "deleted_at",
                     "deleted_by",
+                    "actual_started_at",
+                    "completed_by",
                 )
             }
         )
@@ -173,6 +204,31 @@ class Todos:
         }
         item["owner_name"] = names.get(row["owner_user_id"], row["owner_user_id"])
         item["assignee_name"] = names.get(row["assignee_user_id"], row["assignee_user_id"])
+        item["initiator_user_id"], item["initiator_name"] = row["owner_user_id"], item["owner_name"]
+        ids = item["participant_user_ids"]
+        participants = (
+            {
+                r["user_id"]: r["name"]
+                for r in db.execute(
+                    "SELECT user_id,name FROM app_users WHERE user_id IN (" + ",".join("?" for _ in ids) + ")", ids
+                )
+            }
+            if ids
+            else {}
+        )
+        item["participants"] = [{"user_id": uid, "name": participants.get(uid, uid)} for uid in ids]
+        item["reminder_state"] = (
+            "disabled"
+            if not item["reminder_enabled"]
+            else "inactive"
+            if row["deleted_at"] or row["status"] not in ACTIVE
+            else "expired"
+            if item["reminder_expires_at"] <= now()
+            else "due"
+            if item["reminder_at"] <= now()
+            else "scheduled"
+        )
+        item["reminder_delivery"] = "not_configured"
         return item
 
     def validate(self, db, user, body, *, creating=False):
@@ -199,6 +255,29 @@ class Todos:
             ).fetchone()
         ):
             raise HTTPException(422, "负责人必须是该家庭的现有成员")
+        participants = list(dict.fromkeys(value["participant_user_ids"]))
+        for uid in participants:
+            if (
+                not uid
+                or len(uid) > 64
+                or (value["visibility"] == "personal" and uid != user)
+                or (
+                    value["visibility"] == "family"
+                    and not db.execute(
+                        "SELECT 1 FROM app_members WHERE family_id=? AND user_id=?", (value["family_id"], uid)
+                    ).fetchone()
+                )
+            ):
+                raise HTTPException(422, "协作成员必须属于当前家庭；私人待办只能选择本人")
+        value["participant_user_ids"] = participants
+        for key in ("reminder_at", "reminder_expires_at"):
+            value[key] = instant(value[key])
+        if value["reminder_enabled"] and not (value["reminder_at"] and value["reminder_expires_at"]):
+            raise HTTPException(422, "启用提醒计划时，请同时填写提醒时间和提醒失效时间")
+        if bool(value["reminder_at"]) != bool(value["reminder_expires_at"]):
+            raise HTTPException(422, "提醒时间与提醒失效时间须同时填写或同时清空")
+        if value["reminder_at"] and value["reminder_expires_at"] <= value["reminder_at"]:
+            raise HTTPException(422, "提醒失效时间必须晚于提醒时间")
         value["start_at"] = instant(value["start_at"])
         if value["due_date"]:
             if value["due_at"]:
@@ -269,7 +348,7 @@ class Todos:
             db.execute(
                 """INSERT INTO todos(id,owner_user_id,family_id,device_id,visibility,assignee_user_id,
                 list_name,title,status,priority,due_at,created_at,updated_at,completed_at,cancelled_at,
-                revision,data,source) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                revision,data,source,actual_started_at,completed_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     task_id,
                     user,
@@ -294,6 +373,8 @@ class Todos:
                     1,
                     json.dumps(value, ensure_ascii=False),
                     json.dumps(source or {"type": "manual"}, ensure_ascii=False),
+                    timestamp if value["status"] == "in_progress" else "",
+                    user if completed else "",
                 ),
             )
             if request_id:
@@ -312,7 +393,8 @@ class Todos:
                 raise HTTPException(409, "待办在回收站中，请先恢复")
             permissions = self._item(db, row, user)
             if not permissions["can_edit"] or (
-                not permissions["can_manage"] and set(changes) - {"status", "checklist"}
+                not permissions["can_manage"]
+                and set(changes) - {"status", "checklist", "blocked_reason", "completion_note", "actual_minutes"}
             ):
                 raise HTTPException(403, "负责人可更新进度；其他字段需创建者或家庭管理员修改")
             if row["revision"] != revision:
@@ -331,6 +413,14 @@ class Todos:
                 ).fetchone()
             ):
                 merged["assignee_user_id"] = ""
+            if row["visibility"] == "family" and "participant_user_ids" not in changes:
+                merged["participant_user_ids"] = [
+                    uid
+                    for uid in old["participant_user_ids"]
+                    if db.execute(
+                        "SELECT 1 FROM app_members WHERE family_id=? AND user_id=?", (row["family_id"], uid)
+                    ).fetchone()
+                ]
             value, due = self.validate(db, row["owner_user_id"], merged)
             diff = {k: {"before": old[k], "after": value[k]} for k in value if old[k] != value[k]}
             if not diff:
@@ -338,9 +428,13 @@ class Todos:
             timestamp = now()
             completed = (row["completed_at"] or timestamp) if value["status"] == "done" else ""
             cancelled = (row["cancelled_at"] or timestamp) if value["status"] == "cancelled" else ""
+            started = row["actual_started_at"] or (
+                timestamp if value["status"] == "in_progress" and row["status"] != "in_progress" else ""
+            )
+            completed_by = (row["completed_by"] if row["status"] == "done" else user) if completed else ""
             db.execute(
                 """UPDATE todos SET assignee_user_id=?,list_name=?,title=?,status=?,priority=?,due_at=?,updated_at=?,
-                completed_at=?,cancelled_at=?,revision=revision+1,data=? WHERE id=?""",
+                completed_at=?,cancelled_at=?,revision=revision+1,data=?,actual_started_at=?,completed_by=? WHERE id=?""",
                 (
                     *[value[k] for k in ("assignee_user_id", "list_name", "title", "status", "priority")],
                     due,
@@ -348,6 +442,8 @@ class Todos:
                     completed,
                     cancelled,
                     json.dumps(value, ensure_ascii=False),
+                    started,
+                    completed_by,
                     task_id,
                 ),
             )

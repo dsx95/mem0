@@ -276,7 +276,7 @@ def test_v4_migration_keeps_trash_and_departure_but_revokes_confirmations(consol
     assert client.delete("/api/identity/families/home/members/bob", headers=HEADERS).status_code == 200
     root = service.settings.data_dir.parent
     package, manifest = m.export_bundle(root, settings(root), client=service.memory.client, materials=service.root)
-    assert manifest["version"] == 4
+    assert manifest["version"] == 5
     target = tmp_path / "restored"
     m.restore_bundle(package, settings(target), target)
     with sqlite3.connect(target / "data/dashboard/chat.sqlite") as db:

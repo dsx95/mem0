@@ -12,7 +12,13 @@ from .todos import Item, TodoData
 
 
 def intent(text):
-    return bool(re.search(r"待办|清单|to[ -]?do|我的任务|家庭任务|任务.{0,8}(完成|取消|截止)|截止|未完成|没做|做完|买好|改到|提醒我", text, re.I))
+    return bool(
+        re.search(
+            r"待办|清单|to[ -]?do|我的任务|家庭任务|任务.{0,8}(完成|取消|截止)|截止|未完成|没做|做完|买好|改到|提醒我",
+            text,
+            re.I,
+        )
+    )
 
 
 schema = TodoData.model_json_schema()
@@ -35,7 +41,7 @@ TOOL = {
             "type": "object",
             "additionalProperties": False,
             "properties": {
-                "action": {"type": "string", "enum": ["list", "get", "create", "update", "delete"]},
+                "action": {"type": "string", "enum": ["list", "get", "members", "create", "update", "delete"]},
                 "task_id": {"type": "string", "description": "get/update/delete 必须来自实际查询结果，不可猜测。"},
                 "revision": {"type": "integer", "description": "update/delete 使用查询结果的 revision。"},
                 "data": {
@@ -69,7 +75,10 @@ list 默认查询当前身份在当前家庭范围的私人和家庭共享待办
 共享范围沿用本轮 remember_scope；身份与范围不能通过 data 更改。一个人的任务创建、完成不会自动修改他人的私人任务。
 只说“明天/周五”时填写 due_date；只有明确时刻才填写 due_at。以当前时间和时区解析相对日期；模糊时间先问清楚，不伪造截止时刻。
 要改期时清空原 due_date 或 due_at 中不再使用的字段；取消用 status=cancelled，完成用 done，重新打开用 pending。不要无意创建重复项。
-此版本支持截止日期和逾期展示，没有主动提醒/推送。用户要求提醒时说明能保存待办但暂不能主动通知，不得声称已设置提醒。
+发起人由当前登录用户自动确定。assignee_user_id 是一位执行人，participant_user_ids 是需要协作的家庭成员 ID；先用 members 查询当前家庭成员的真实 ID，不猜 ID。同名或身份不明确时先询问。
+required_resources 可记录所需物品、资料和外部联系人的说明；completion_criteria 记录完成标准；blocked_reason、completion_note、actual_minutes 记录执行情况，不猜测执行结果或耗时。
+提醒计划与截止时间独立：reminder_enabled、reminder_at、reminder_expires_at、reminder_note。启用计划须有明确的提醒时刻和失效时刻，均带时区；缺失时先询问，不擅自猜测。
+此版本只能保存提醒计划，没有主动提醒/响铃/推送。用户要求提醒时明确说明保存计划后也不会主动通知，不得声称闹钟已生效。工具返回 reminder_state 仅表示计划时间窗口，reminder_delivery=not_configured 表示未接入投递。
 工具返回 changed=true 或 deleted=true 后才能声称操作完成；工具返回错误时说明未完成并据提示修正或让用户刷新。"""
 
 PROMPT += """\ndelete 只生成有效期十分钟的删除确认卡，不能执行删除。返回 requires_confirmation=true 时明确告诉用户尚未删除，请点击卡片确认。
@@ -87,8 +96,16 @@ def model_item(item, *, detail=False):
     # List every matching row through pagination, but don't fill model context
     # with full descriptions, source quotes and each task's entire event history.
     result = {key: value for key, value in item.items() if key not in {"events", "source", "description", "checklist"}}
-    result["description"] = item.get("description", "")[: 1200 if detail else 300]
-    result["description_truncated"] = len(result["description"]) < len(item.get("description", ""))
+    for field in (
+        "description",
+        "required_resources",
+        "completion_criteria",
+        "blocked_reason",
+        "completion_note",
+        "reminder_note",
+    ):
+        result[field] = item.get(field, "")[: 1200 if detail else 300]
+        result[field + "_truncated"] = len(result[field]) < len(item.get(field, ""))
     result["checklist_progress"] = {
         "done": sum(c["done"] for c in item.get("checklist", [])),
         "total": len(item.get("checklist", [])),
@@ -105,6 +122,17 @@ def execute(service, session, args):
         user, family = session["user_id"], session.get("family_id", "")
         service.access.require_context(user, family, session.get("device_id", ""))
         action = args.get("action")
+        if action == "members":
+            with service.access.db() as db:
+                if family:
+                    rows = db.execute(
+                        "SELECT u.user_id,u.name FROM app_users u JOIN app_members m ON u.user_id=m.user_id "
+                        "WHERE m.family_id=? AND EXISTS (SELECT 1 FROM app_members WHERE family_id=? AND user_id=?) ORDER BY u.user_id",
+                        (family, family, user),
+                    )
+                else:
+                    rows = db.execute("SELECT user_id,name FROM app_users WHERE user_id=?", (user,))
+                return {"members": [dict(row) for row in rows]}
         if action == "list":
             listing = service.todos.list(
                 user,

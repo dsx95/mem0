@@ -44,15 +44,25 @@ def depart(service, chat, actor, family, member, successor=""):
         elif successor:
             raise HTTPException(422, "只有家庭管理员退出时需要指定接任者")
         stamp = now()
-        rows = db.execute(
-            "SELECT * FROM todos WHERE family_id=? AND visibility='family' AND assignee_user_id=?", (family, member)
-        ).fetchall()
+        rows = db.execute("SELECT * FROM todos WHERE family_id=? AND visibility='family'", (family,)).fetchall()
+        unassigned, collaborations = 0, 0
         for row in rows:
             data = json.loads(row["data"])
-            data["assignee_user_id"] = ""
+            changes = {}
+            if data["assignee_user_id"] == member:
+                changes["assignee_user_id"] = {"before": member, "after": ""}
+                data["assignee_user_id"] = ""
+                unassigned += 1
+            if member in data.get("participant_user_ids", []):
+                before = data["participant_user_ids"]
+                data["participant_user_ids"] = [uid for uid in before if uid != member]
+                changes["participant_user_ids"] = {"before": before, "after": data["participant_user_ids"]}
+                collaborations += 1
+            if not changes:
+                continue
             db.execute(
-                "UPDATE todos SET assignee_user_id='',data=?,updated_at=?,revision=revision+1 WHERE id=?",
-                (json.dumps(data, ensure_ascii=False), stamp, row["id"]),
+                "UPDATE todos SET assignee_user_id=?,data=?,updated_at=?,revision=revision+1 WHERE id=?",
+                (data["assignee_user_id"], json.dumps(data, ensure_ascii=False), stamp, row["id"]),
             )
             service.todos.event(
                 db,
@@ -60,7 +70,7 @@ def depart(service, chat, actor, family, member, successor=""):
                 row["revision"] + 1,
                 actor,
                 "member_left",
-                {"assignee_user_id": {"before": member, "after": ""}},
+                changes,
             )
         # Old pending actions must not become valid again after a later rejoin.
         db.execute(
@@ -76,7 +86,8 @@ def depart(service, chat, actor, family, member, successor=""):
             "left": True,
             "family_id": family,
             "member": member,
-            "unassigned_todos": len(rows),
+            "unassigned_todos": unassigned,
+            "removed_collaborations": collaborations,
             "successor_user_id": successor,
         }
 

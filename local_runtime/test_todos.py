@@ -289,7 +289,7 @@ def test_todos_survive_migration_and_records_are_not_overwritten(console, tmp_pa
     update(client, item, status="in_progress")
     root = service.settings.data_dir.parent
     package, manifest = m.export_bundle(root, settings(root), client=service.memory.client, materials=service.root)
-    assert manifest["version"] == 4 and manifest["counts"]["todos"] == 1 and manifest["counts"]["todo_events"] == 2
+    assert manifest["version"] == 5 and manifest["counts"]["todos"] == 1 and manifest["counts"]["todo_events"] == 2
     target = tmp_path / "restored"
     m.restore_bundle(package, settings(target), target)
     with sqlite3.connect(target / "data/dashboard/chat.sqlite") as db:

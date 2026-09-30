@@ -5,7 +5,7 @@ export function familyControls(family,user,esc){
 }
 export function installDepartures({api,state,after,failure,notify}){
   let target=null,busy=false;
-  document.body.insertAdjacentHTML('beforeend',`<dialog id="departure-dialog"><div class="dialog-top"><h2 id="departure-title">退出家庭</h2><button id="departure-close" aria-label="关闭">×</button></div><p id="departure-description"></p><p class="muted">离开后将无法访问家庭共享记忆、待办和家庭设备。个人记录保留；共享待办保留在家庭中，原指派给离开成员的事项变为未指派。已有备份和历史对话不会自动擦除。</p><form id="departure-form" class="stack"><label id="departure-successor-label">接任管理员<select id="departure-successor"></select></label><p id="departure-error" role="alert"></p><button class="danger" id="departure-confirm">确认退出</button></form></dialog>`);
+  document.body.insertAdjacentHTML('beforeend',`<dialog id="departure-dialog"><div class="dialog-top"><h2 id="departure-title">退出家庭</h2><button id="departure-close" aria-label="关闭">×</button></div><p id="departure-description"></p><p class="muted">离开后将无法访问家庭共享记忆、待办和家庭设备。个人记录保留；共享待办保留在家庭中，原指派给离开成员的事项变为未指派，并移除其协作关系。已有备份和历史对话不会自动擦除。</p><form id="departure-form" class="stack"><label id="departure-successor-label">接任管理员<select id="departure-successor"></select></label><p id="departure-error" role="alert"></p><button class="danger" id="departure-confirm">确认退出</button></form></dialog>`);
   document.addEventListener('click',event=>{
     const button=event.target.closest('[data-family-leave],[data-family-remove]');if(!button||busy)return;
     const family=state.me.families.find(f=>f.family_id===(button.dataset.familyLeave||button.dataset.familyRemove));if(!family)return;
@@ -30,7 +30,7 @@ export function installDepartures({api,state,after,failure,notify}){
       const path='/api/identity/families/'+encodeURIComponent(target.family);
       const result=await api(path+(target.member===target.user?'/leave':'/members/'+encodeURIComponent(target.member)),target.member===target.user?{method:'POST',body:JSON.stringify({successor_user_id:target.owner?$('departure-successor').value:''})}:{method:'DELETE'});
       $('departure-dialog').close();if(target.user!==state.me?.user_id)return;
-      await after();notify('成员已退出；'+result.unassigned_todos+' 条共享待办已解除指派');
+      await after();notify('成员已退出；'+result.unassigned_todos+' 条共享待办已解除指派，'+result.removed_collaborations+' 条协作关系已移除');
     }catch(error){$('departure-error').textContent=error.message;failure(error);}finally{busy=false;$('departure-confirm').disabled=false;}
   };
 }

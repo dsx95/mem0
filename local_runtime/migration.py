@@ -20,7 +20,7 @@ import uuid
 import portalocker
 
 FORMAT = "knowin-memory-migration"
-VERSION = 4
+VERSION = 5
 MAX_BYTES = 50 * 1024**3
 MAX_FILES = 100000
 ROOT = Path(__file__).resolve().parent.parent
@@ -317,7 +317,7 @@ def _extract_bundle(package, stage):
             with archive.extractfile(member) as src, path.open("xb") as out:
                 shutil.copyfileobj(src, out, length=1024 * 1024)
     manifest = json.loads((stage / "manifest.json").read_text())
-    if manifest.get("format") != FORMAT or manifest.get("version") not in {1, 2, 3, VERSION}:
+    if manifest.get("format") != FORMAT or manifest.get("version") not in {1, 2, 3, 4, VERSION}:
         raise MigrationError("迁移包格式/版本不支持")
     files = manifest.get("files", {})
     if set(files) | {"manifest.json"} != seen or "vectors.jsonl" not in files:
